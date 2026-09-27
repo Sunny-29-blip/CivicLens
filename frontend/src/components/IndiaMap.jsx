@@ -83,6 +83,18 @@ const DISTRICT_ALIASES = {
   'gurgaon': 'gurugram',
   'vishakhapatnam': 'visakhapatnam',
   'visakhapatnam': 'vishakhapatnam',
+  'north': 'north delhi',
+  'north west': 'north west delhi',
+  'north east': 'north east delhi',
+  'west': 'west delhi',
+  'central': 'central delhi',
+  'east': 'east delhi',
+  'south west': 'south west delhi',
+  'south': 'south delhi',
+  'south east': 'south east delhi',
+  'new delhi': 'new delhi',
+  'shahdara': 'shahdara',
+  'delhi': 'central delhi'
 };
 
 function matchRegion(geoName, dataMap, aliases = {}) {

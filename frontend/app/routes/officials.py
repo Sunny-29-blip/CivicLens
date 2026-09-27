@@ -244,7 +244,7 @@ def _compute_hotspots(
 
         clean_state = g_state.replace(" ", "").lower()[:3] if g_state else "ind"
         clean_dist = g_district.replace(" ", "").lower()[:3] if g_district else "dst"
-        hotspot_id = f"hotspot-{clean_state}-{clean_dist}-{g_cat}"
+        hotspot_id = f"hotspot-{clean_state}-{clean_dist}-{g_cat}-{g_area}"
 
         hotspots.append(HotspotItem(
             hotspot_id=hotspot_id,

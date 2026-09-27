@@ -69,7 +69,7 @@ export default function OfficialsDashboard({ session, onLogout }) {
   const [drillState, setDrillState] = useState('');
   const [drillDistrict, setDrillDistrict] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
-  const [selectedHotspot, setSelectedHotspot] = useState(null);
+  const [selectedHotspotId, setSelectedHotspotId] = useState(null);
   const [updatingId, setUpdatingId] = useState(null);
   const [dashTab, setDashTab] = useState('overview'); // 'overview' | 'hotspots' | 'grievances'
   const [statusFilter, setStatusFilter] = useState('open'); // 'open' | 'all' | 'resolved'
@@ -163,20 +163,7 @@ export default function OfficialsDashboard({ session, onLogout }) {
         };
       });
 
-      // 2. Optimistic update of selectedHotspot drilldown
-      setSelectedHotspot(prev => {
-        if (!prev) return prev;
-        const updatedList = (prev.complaints || []).map(c => 
-          c.id === complaintId ? { ...c, status: newStatus } : c
-        );
-        return {
-          ...prev,
-          complaints: updatedList,
-          complaint_count: updatedList.filter(c => c.status !== 'resolved').length
-        };
-      });
-
-      // 3. Optimistic update of hotspots matrix list
+      // 2. Optimistic update of hotspots matrix list
       setHotspots(prev => 
         prev.map(h => {
           const updatedList = (h.complaints || []).map(c => 
@@ -581,60 +568,188 @@ export default function OfficialsDashboard({ session, onLogout }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {hotspots.map((h) => (
-                      <tr key={h.hotspot_id} className="hotspot-row" style={{ borderBottom: '1px solid var(--line)' }}>
-                        <td style={{ padding: '12px' }}>
-                          <div style={{ fontWeight: 600, color: 'var(--navy)' }}>{h.district}</div>
-                          <div style={{ fontSize: '11.5px', color: 'var(--navy-soft)' }}>{h.state}</div>
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <span style={{
-                            background: 'rgba(22, 86, 224, 0.08)',
-                            color: 'var(--blue)',
-                            border: '1px solid rgba(22, 86, 224, 0.25)',
-                            padding: '3px 9px',
-                            borderRadius: 'var(--radius-full)',
-                            fontSize: '11.5px',
-                            fontWeight: 600,
-                            textTransform: 'capitalize'
-                          }}>
-                            {h.category.replace(/_/g, ' ')}
-                          </span>
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <span className={`tag-area ${h.area_type === 'rural' ? 'tag-rural' : 'tag-urban'}`}>
-                            {h.area_type === 'rural' ? 'Rural' : 'Urban'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <span style={{ fontWeight: 800, fontSize: '15px', color: 'var(--navy)' }}>
-                            {h.complaint_count}
-                          </span>{' '}
-                          <span style={{ fontSize: '13px', color: 'var(--navy-soft)', fontWeight: 500 }}>
-                            issue{h.complaint_count > 1 ? 's' : ''}
-                          </span>
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <span className={`urgency-badge ${getPriorityBadgeClass(h.priority_score)}`}>
-                            {h.priority_score} / 100
-                          </span>
-                          <div style={{ fontSize: '11px', color: 'var(--navy-soft)', marginTop: '3px' }}>
-                            {h.formula_breakdown?.formula_str}
-                          </div>
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <button
-                            type="button"
-                            onClick={() => setSelectedHotspot(selectedHotspot?.hotspot_id === h.hotspot_id ? null : h)}
-                            className="btn-secondary"
-                            style={{ padding: '4px 10px', fontSize: '11.5px' }}
+                    {hotspots.map((h, index) => {
+                      const rowKey = h.hotspot_id || `hotspot-${h.state}-${h.district}-${h.category}-${index}`;
+                      const isExpanded = selectedHotspotId === rowKey;
+                      const activeHotspotComplaints = (h.complaints || []).filter(c => c.status !== 'resolved');
+
+                      return (
+                        <React.Fragment key={rowKey}>
+                          <tr
+                            className="hotspot-row"
+                            style={{
+                              borderBottom: isExpanded ? 'none' : '1px solid var(--line)',
+                              background: isExpanded ? 'rgba(22, 86, 224, 0.04)' : undefined,
+                              transition: 'background 0.15s ease'
+                            }}
                           >
-                            <Eye size={12} />
-                            <span>{selectedHotspot?.hotspot_id === h.hotspot_id ? 'Hide' : 'Inspect'}</span>
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                            <td style={{ padding: '12px' }}>
+                              <div style={{ fontWeight: 600, color: 'var(--navy)' }}>{h.district || h.state}</div>
+                              <div style={{ fontSize: '11.5px', color: 'var(--navy-soft)' }}>{h.state || 'National'}</div>
+                            </td>
+                            <td style={{ padding: '12px' }}>
+                              <span style={{
+                                background: 'rgba(22, 86, 224, 0.08)',
+                                color: 'var(--blue)',
+                                border: '1px solid rgba(22, 86, 224, 0.25)',
+                                padding: '3px 9px',
+                                borderRadius: 'var(--radius-full)',
+                                fontSize: '11.5px',
+                                fontWeight: 600,
+                                textTransform: 'capitalize'
+                              }}>
+                                {(h.category || '').replace(/_/g, ' ')}
+                              </span>
+                            </td>
+                            <td style={{ padding: '12px' }}>
+                              <span className={`tag-area ${h.area_type === 'rural' ? 'tag-rural' : 'tag-urban'}`}>
+                                {h.area_type === 'rural' ? 'Rural' : 'Urban'}
+                              </span>
+                            </td>
+                            <td style={{ padding: '12px' }}>
+                              <span style={{ fontWeight: 800, fontSize: '15px', color: 'var(--navy)' }}>
+                                {h.complaint_count}
+                              </span>{' '}
+                              <span style={{ fontSize: '13px', color: 'var(--navy-soft)', fontWeight: 500 }}>
+                                issue{h.complaint_count > 1 ? 's' : ''}
+                              </span>
+                            </td>
+                            <td style={{ padding: '12px' }}>
+                              <span className={`urgency-badge ${getPriorityBadgeClass(h.priority_score)}`}>
+                                {h.priority_score} / 100
+                              </span>
+                              <div style={{ fontSize: '11px', color: 'var(--navy-soft)', marginTop: '3px' }}>
+                                {h.formula_breakdown?.formula_str}
+                              </div>
+                            </td>
+                            <td style={{ padding: '12px' }}>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedHotspotId(prev => prev === rowKey ? null : rowKey)}
+                                className={isExpanded ? 'btn-primary' : 'btn-secondary'}
+                                style={{ padding: '4px 10px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                              >
+                                <Eye size={12} />
+                                <span>{isExpanded ? 'Collapse' : 'Inspect'}</span>
+                              </button>
+                            </td>
+                          </tr>
+
+                          {/* Inline Accordion Detail Drawer */}
+                          {isExpanded && (
+                            <tr style={{ borderBottom: '1px solid var(--line)' }}>
+                              <td colSpan={6} style={{ padding: '0', background: 'transparent' }}>
+                                <div style={{
+                                  background: 'var(--ice)',
+                                  borderLeft: '4px solid var(--blue)',
+                                  borderRight: '1px solid var(--line)',
+                                  borderBottom: '1px solid var(--line)',
+                                  padding: '16px 20px',
+                                  margin: '0 0 10px 0',
+                                  borderRadius: '0 0 var(--radius-sm) var(--radius-sm)',
+                                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.03)'
+                                }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                                    <h4 style={{ fontSize: '14.5px', margin: 0, color: 'var(--navy)' }}>
+                                      Inspecting Hotspot: {h.district || h.state} ({h.state || 'National'}) — {(h.category || '').replace(/_/g, ' ').toUpperCase()}
+                                    </h4>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                      <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--navy-soft)' }}>
+                                        {activeHotspotComplaints.length} open issue{activeHotspotComplaints.length === 1 ? '' : 's'}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedHotspotId(null)}
+                                        style={{
+                                          background: 'none',
+                                          border: 'none',
+                                          color: 'var(--navy-soft)',
+                                          fontSize: '11.5px',
+                                          cursor: 'pointer',
+                                          fontWeight: 600,
+                                          textDecoration: 'underline'
+                                        }}
+                                      >
+                                        Close
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {activeHotspotComplaints.length === 0 ? (
+                                    <div style={{
+                                      textAlign: 'center',
+                                      padding: '20px',
+                                      background: 'var(--white)',
+                                      borderRadius: 'var(--radius-sm)',
+                                      border: '1px solid var(--line)',
+                                      color: '#047857',
+                                      fontWeight: 600,
+                                      fontSize: '13.5px',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      gap: '8px'
+                                    }}>
+                                      <CheckCircle2 size={18} color="var(--emerald)" />
+                                      <span>All complaints in this hotspot cluster have been resolved!</span>
+                                    </div>
+                                  ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                      {activeHotspotComplaints.map((c) => (
+                                        <div key={c.id} style={{
+                                          background: 'var(--white)',
+                                          border: '1px solid var(--line)',
+                                          borderRadius: 'var(--radius-sm)',
+                                          padding: '12px 16px',
+                                          display: 'flex',
+                                          justifyContent: 'space-between',
+                                          alignItems: 'center',
+                                          flexWrap: 'wrap',
+                                          gap: '10px'
+                                        }}>
+                                          <div style={{ maxWidth: '600px' }}>
+                                            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--navy)', lineHeight: 1.4 }}>
+                                              {c.summary || c.raw_text}
+                                            </div>
+                                            <div style={{ fontSize: '11.5px', color: 'var(--navy-soft)', marginTop: '3px' }}>
+                                              ID: <code>{c.id}</code> · Locality: {c.locality || c.location || h.district} · Priority: <strong>{c.priority_score || 50}/100</strong>
+                                            </div>
+                                          </div>
+
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span style={{
+                                              fontSize: '11px',
+                                              fontWeight: 600,
+                                              padding: '2px 8px',
+                                              borderRadius: 'var(--radius-full)',
+                                              background: c.status === 'resolved' ? 'var(--emerald-bg)' : c.status === 'in_progress' ? 'var(--amber-bg)' : 'var(--ice)',
+                                              color: c.status === 'resolved' ? '#047857' : c.status === 'in_progress' ? '#b45309' : 'var(--navy)'
+                                            }}>
+                                              {(c.status || 'open').toUpperCase()}
+                                            </span>
+
+                                            <button
+                                              type="button"
+                                              disabled={updatingId === c.id}
+                                              onClick={() => handleUpdateStatus(c.id, 'resolved')}
+                                              className="btn-primary"
+                                              style={{ padding: '5px 10px', fontSize: '11px', background: 'var(--emerald)', whiteSpace: 'nowrap' }}
+                                            >
+                                              <Check size={12} />
+                                              <span>Mark Resolved</span>
+                                            </button>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -644,98 +759,6 @@ export default function OfficialsDashboard({ session, onLogout }) {
               </div>
             )}
           </div>
-
-          {/* Selected Hotspot Inspection Drawer */}
-          {selectedHotspot && (() => {
-            const activeHotspotComplaints = (selectedHotspot.complaints || []).filter(c => c.status !== 'resolved');
-            return (
-              <div style={{
-                background: 'var(--ice)',
-                border: '1px solid var(--sky)',
-                borderRadius: 'var(--radius-md)',
-                padding: '20px',
-                marginBottom: '20px'
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                  <h4 style={{ fontSize: '15px', margin: 0, color: 'var(--navy)' }}>
-                    Inspecting Hotspot: {selectedHotspot.district} ({selectedHotspot.state}) — {selectedHotspot.category?.replace(/_/g, ' ').toUpperCase()}
-                  </h4>
-                  <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--navy-soft)' }}>
-                    {activeHotspotComplaints.length} open issue{activeHotspotComplaints.length === 1 ? '' : 's'}
-                  </span>
-                </div>
-
-                {activeHotspotComplaints.length === 0 ? (
-                  <div style={{
-                    textAlign: 'center',
-                    padding: '24px',
-                    background: 'var(--white)',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--line)',
-                    color: '#047857',
-                    fontWeight: 600,
-                    fontSize: '14px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '8px'
-                  }}>
-                    <CheckCircle2 size={18} color="var(--emerald)" />
-                    <span>All complaints in this hotspot have been marked as resolved!</span>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {activeHotspotComplaints.map((c) => (
-                      <div key={c.id} style={{
-                        background: 'var(--white)',
-                        border: '1px solid var(--line)',
-                        borderRadius: 'var(--radius-sm)',
-                        padding: '12px 16px',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        flexWrap: 'wrap',
-                        gap: '10px'
-                      }}>
-                        <div style={{ maxWidth: '600px' }}>
-                          <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--navy)' }}>
-                            {c.summary || c.raw_text}
-                          </div>
-                          <div style={{ fontSize: '11.5px', color: 'var(--navy-soft)', marginTop: '3px' }}>
-                            ID: <code>{c.id}</code> · Locality: {c.locality || c.location} · Priority: <strong>{c.priority_score}/100</strong>
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{
-                            fontSize: '11px',
-                            fontWeight: 600,
-                            padding: '2px 8px',
-                            borderRadius: 'var(--radius-full)',
-                            background: c.status === 'resolved' ? 'var(--emerald-bg)' : c.status === 'in_progress' ? 'var(--amber-bg)' : 'var(--ice)',
-                            color: c.status === 'resolved' ? '#047857' : c.status === 'in_progress' ? '#b45309' : 'var(--navy)'
-                          }}>
-                            {(c.status || 'open').toUpperCase()}
-                          </span>
-
-                          <button
-                            type="button"
-                            disabled={updatingId === c.id}
-                            onClick={() => handleUpdateStatus(c.id, 'resolved')}
-                            className="btn-primary"
-                            style={{ padding: '5px 10px', fontSize: '11px', background: 'var(--emerald)' }}
-                          >
-                            <Check size={12} />
-                            <span>Mark Resolved</span>
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })()}
         </>
       )}
 
