@@ -9,6 +9,7 @@
     { "source": "/api",            "destination": "/api/index" },
     { "source": "/auth/(.*)",       "destination": "/api/index" },
     { "source": "/requests/(.*)",   "destination": "/api/index" },
+    { "source": "/requests",        "destination": "/api/index" },
     { "source": "/public/(.*)",     "destination": "/api/index" },
     { "source": "/officials/(.*)",  "destination": "/api/index" },
     { "source": "/docs",            "destination": "/api/index" },

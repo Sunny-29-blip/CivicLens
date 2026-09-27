@@ -1,4 +1,8 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+// In production on Vercel, use relative paths ("") so all API calls hit the same domain seamlessly.
+// In local development, respect VITE_API_URL or fallback to "http://localhost:8000".
+const API_BASE_URL = (import.meta.env.VITE_API_URL !== undefined && import.meta.env.VITE_API_URL !== "")
+  ? import.meta.env.VITE_API_URL
+  : (import.meta.env.PROD ? "" : "http://localhost:8000");
 
 /**
  * CivicLens Unified API Client
