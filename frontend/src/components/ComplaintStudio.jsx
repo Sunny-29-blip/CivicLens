@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 
-const SAMPLE_PROMPTS = [
+const SAMPLE_PROMPTS_POOL = [
   {
     label: "Urban Bangalore — Roads + Traffic",
     text: "Outer Ring Road near Silk Board Junction has massive crater potholes causing 2-hour daily traffic jams and dangerous accidents for two-wheelers.",
@@ -34,6 +34,48 @@ const SAMPLE_PROMPTS = [
     state: "Bihar",
     district: "Madhubani",
     locality: "Phulparas"
+  },
+  {
+    label: "Urban Delhi — Pollution + Sanitation",
+    text: "Severe industrial waste burning and blocked open storm drains in Okhla Phase 2 causing toxic smog and respiratory issues for local residents.",
+    state: "Delhi",
+    district: "Delhi",
+    locality: "Okhla"
+  },
+  {
+    label: "Rural Maharashtra — Drought + Power",
+    text: "Amchya gaavat 10 divasapasun vij puravatha band ahe, shetitalya panipuryavthyala motha phatka basla ahe.",
+    state: "Maharashtra",
+    district: "Pune",
+    locality: "Baramati"
+  },
+  {
+    label: "Urban Chennai — Roads + Water Shortage",
+    text: "Metro water pipelines ruptured during road widening in Velachery, leaving residential blocks without municipal drinking water for 5 days.",
+    state: "Tamil Nadu",
+    district: "Chennai",
+    locality: "Velachery"
+  },
+  {
+    label: "Rural Rajasthan — Network + Healthcare",
+    text: "No mobile network connectivity in Pokhran rural belt for 2 weeks, preventing villagers from booking emergency ambulances and telehealth consultations.",
+    state: "Rajasthan",
+    district: "Jaisalmer",
+    locality: "Pokhran"
+  },
+  {
+    label: "Urban Kolkata — Waste Dumping + Drainage",
+    text: "Severe municipal garbage accumulation and waterlogging around Gariahat market following monsoon rain, creating severe public health hazard.",
+    state: "West Bengal",
+    district: "Kolkata",
+    locality: "Gariahat"
+  },
+  {
+    label: "Rural Punjab — Canal Gate + Power Cut",
+    text: "Canal distributary breach in Khanna block flooding standing wheat crop while frequent 12-hour unscheduled power cuts prevent drainage pumps from operating.",
+    state: "Punjab",
+    district: "Ludhiana",
+    locality: "Khanna"
   }
 ];
 
@@ -103,6 +145,9 @@ export default function ComplaintStudio({ session, onRequireAuth, onViewInFeed, 
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [submittedDoc, setSubmittedDoc] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activePrompts] = useState(() => {
+    return [...SAMPLE_PROMPTS_POOL].sort(() => 0.5 - Math.random()).slice(0, 4);
+  });
 
   const recognitionRef = useRef(null);
 
@@ -323,7 +368,7 @@ export default function ComplaintStudio({ session, onRequireAuth, onViewInFeed, 
                 <span className="dot"></span>
                 <span>AI for Digital Public Infrastructure & Governance</span>
               </div>
-              <h1>Your problems, finally <span>in focus.</span></h1>
+              <h1>Report <span>Your Issue</span></h1>
               <p>
                 CivicLens combines Google Gemini multilingual intelligence with deterministic jurisdiction verification to classify compound civic issues, eliminate hallucinations, and compute explainable 0–100 governance priority scores.
               </p>
@@ -478,8 +523,8 @@ export default function ComplaintStudio({ session, onRequireAuth, onViewInFeed, 
               </div>
               
               {session?.role === 'citizen' ? (
-                <span style={{ fontSize: '12px', color: 'var(--emerald)', fontWeight: 600 }}>
-                  ● Logged in as {session.profile.name}
+                <span style={{ fontSize: '12px', color: 'var(--emerald)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <span className="live-status-dot" /> Logged in as {session.profile.name}
                 </span>
               ) : (
                 <button 
@@ -609,7 +654,7 @@ export default function ComplaintStudio({ session, onRequireAuth, onViewInFeed, 
                   <span>Interactive Hackathon Test Cases:</span>
                 </div>
                 <div className="prompt-chips">
-                  {SAMPLE_PROMPTS.map((p, idx) => (
+                  {activePrompts.map((p, idx) => (
                     <button
                       key={idx}
                       type="button"

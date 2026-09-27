@@ -1261,3 +1261,28 @@ footer button:hover {
   padding: 12px 14px;
   margin-bottom: 10px;
 }
+
+/* Live Status Dot Pulsing Animation (Logged in status) */
+.live-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--emerald);
+  display: inline-block;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+  animation: liveDotPulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes liveDotPulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.9);
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0);
+  }
+}
+

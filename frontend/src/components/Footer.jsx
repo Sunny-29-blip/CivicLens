@@ -99,7 +99,7 @@ export default function Footer({ setCurrentTab, onOpenReport, onSwitchFeed }) {
             © {year} CivicLens
           </div>
           <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--navy-soft)' }}>
-            Built by Surendra, Srinivas and Uday.
+            Built by Srinivas, Uday and Surendra.
           </div>
         </div>
 
