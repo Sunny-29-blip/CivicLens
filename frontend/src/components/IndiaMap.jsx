@@ -301,7 +301,7 @@ function ChoroplethMap({ geoData, isNational, scopeState, dataMap, maxCount }) {
     if (!safeGeoData?.features) return [];
     if (isNational) return safeGeoData.features;
     return safeGeoData.features.filter(geo => {
-      const geoState = normalize(geo.properties?.NAME_1 || '');
+      const geoState = normalize(geo.properties?.NAME_1 || geo.properties?.st_nm || geo.properties?.state || '');
       return geoState === scopeState ||
         normalize(STATE_ALIASES[scopeState] || '') === geoState ||
         normalize(STATE_ALIASES[geoState] || '') === scopeState;
@@ -378,7 +378,7 @@ function ChoroplethMap({ geoData, isNational, scopeState, dataMap, maxCount }) {
             const geosToRender = isNational
               ? geographies
               : geographies.filter(geo => {
-                  const geoState = normalize(geo.properties?.NAME_1 || '');
+                  const geoState = normalize(geo.properties?.NAME_1 || geo.properties?.st_nm || geo.properties?.state || '');
                   return geoState === scopeState ||
                     normalize(STATE_ALIASES[scopeState] || '') === geoState ||
                     normalize(STATE_ALIASES[geoState] || '') === scopeState;
@@ -386,8 +386,8 @@ function ChoroplethMap({ geoData, isNational, scopeState, dataMap, maxCount }) {
 
             return geosToRender.map(geo => {
               const rawName = isNational
-                ? (geo.properties?.NAME_1 || 'Unknown')
-                : (geo.properties?.NAME_2 || geo.properties?.NAME_1 || 'Unknown');
+                ? (geo.properties?.NAME_1 || geo.properties?.st_nm || geo.properties?.state || 'Unknown')
+                : (geo.properties?.district || geo.properties?.NAME_2 || geo.properties?.NAME_1 || 'Unknown');
 
               const check = validateGeoFeature(geo);
               if (!check.valid) {
