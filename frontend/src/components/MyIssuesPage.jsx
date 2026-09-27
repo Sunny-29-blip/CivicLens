@@ -17,15 +17,15 @@ export default function MyIssuesPage({ session, onOpenReport }) {
   }, [session]);
 
   const STATUS_STYLES = {
-    pending:     { bg: 'var(--ice)',        color: 'var(--navy)',  label: 'Pending' },
-    in_progress: { bg: 'var(--amber-bg)',   color: '#b45309',     label: 'In Progress' },
-    resolved:    { bg: 'var(--emerald-bg)', color: '#047857',     label: 'Resolved' }
+    pending:     { bg: 'rgba(92, 114, 144, 0.08)',  color: 'var(--navy-soft)',    dotColor: 'var(--navy-soft)', label: 'Pending' },
+    in_progress: { bg: 'rgba(217, 119, 6, 0.08)',   color: 'var(--amber-text)',   dotColor: 'var(--amber)',     label: 'In Progress' },
+    resolved:    { bg: 'rgba(5, 150, 105, 0.08)',   color: 'var(--emerald-text)', dotColor: 'var(--emerald)',   label: 'Resolved' }
   };
   const LEVEL_LABELS = {
-    local:    { text: 'Local Office',    bg: '#f0fdf4', color: '#166534' },
-    district: { text: 'District Level', bg: '#eff6ff', color: '#1e40af' },
-    state:    { text: 'State Level',    bg: '#faf5ff', color: '#6b21a8' },
-    national: { text: 'National Level', bg: '#fff7ed', color: '#9a3412' }
+    local:    { text: 'Local Office',   bg: 'transparent', border: '1px solid var(--line)', color: 'var(--navy-soft)' },
+    district: { text: 'District Level', bg: 'transparent', border: '1px solid var(--line)', color: 'var(--navy-soft)' },
+    state:    { text: 'State Level',    bg: 'transparent', border: '1px solid var(--line)', color: 'var(--navy-soft)' },
+    national: { text: 'National Level', bg: 'transparent', border: '1px solid var(--line)', color: 'var(--navy-soft)' }
   };
 
   const getEstDate = (issue) => {
@@ -38,7 +38,7 @@ export default function MyIssuesPage({ session, onOpenReport }) {
   };
 
   return (
-    <div style={{ maxWidth: '900px', margin: '0 auto', padding: '40px 24px 64px' }}>
+    <div style={{ maxWidth: '900px', margin: '0 auto', padding: '88px 24px 64px' }}>
       {/* Page header */}
       <div style={{ marginBottom: '32px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
@@ -106,24 +106,29 @@ export default function MyIssuesPage({ session, onOpenReport }) {
                     </div>
                   </div>
                   <span style={{
-                    fontSize: '11.5px', fontWeight: 700, padding: '4px 12px', whiteSpace: 'nowrap',
-                    borderRadius: 'var(--radius-full)', background: st.bg, color: st.color
-                  }}>{st.label}</span>
+                    fontSize: '11px', fontWeight: 500, padding: '2px 8px', whiteSpace: 'nowrap',
+                    borderRadius: 'var(--radius-full)', background: st.bg, color: st.color,
+                    display: 'inline-flex', alignItems: 'center', gap: '5px'
+                  }}>
+                    <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: st.dotColor, flexShrink: 0 }} />
+                    {st.label}
+                  </span>
                 </div>
 
                 {/* Row 2: category chips + tier badge + resolution */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                   {(issue.categories || []).slice(0, 2).map((cat, i) => (
                     <span key={i} style={{
-                      fontSize: '11px', fontWeight: 600, padding: '2px 9px',
+                      fontSize: '11px', fontWeight: 500, padding: '2px 8px',
                       borderRadius: 'var(--radius-full)',
-                      background: 'rgba(22,86,224,0.07)', color: 'var(--blue)',
-                      border: '1px solid rgba(22,86,224,0.18)', textTransform: 'capitalize'
+                      background: 'transparent', color: 'var(--navy-soft)',
+                      border: '1px solid var(--line)', textTransform: 'capitalize'
                     }}>{cat.replace(/_/g, ' ')}</span>
                   ))}
                   <span style={{
-                    fontSize: '11px', fontWeight: 600, padding: '2px 10px',
-                    borderRadius: 'var(--radius-full)', background: lv.bg, color: lv.color
+                    fontSize: '11px', fontWeight: 500, padding: '2px 8px',
+                    borderRadius: 'var(--radius-full)', background: lv.bg, color: lv.color,
+                    border: lv.border
                   }}>⚙ {lv.text}</span>
 
                   <span style={{ marginLeft: 'auto', fontSize: '12px', color: 'var(--navy-soft)' }}>

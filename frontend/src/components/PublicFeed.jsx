@@ -9,16 +9,18 @@ import { api } from '../services/api';
 /* ─── Status pill ─────────────────────────────────────────────────────────── */
 function StatusPill({ status }) {
   const map = {
-    resolved: { label: 'Resolved', bg: 'var(--emerald-bg)', color: '#047857' },
-    in_progress: { label: 'In Progress', bg: 'var(--amber-bg)', color: '#b45309' },
-    pending: { label: 'Open', bg: 'var(--ice)', color: 'var(--navy)' },
+    resolved: { label: 'Resolved', dotColor: 'var(--emerald)', bg: 'rgba(5, 150, 105, 0.08)', color: 'var(--emerald-text)' },
+    in_progress: { label: 'In Progress', dotColor: 'var(--amber)', bg: 'rgba(217, 119, 6, 0.08)', color: 'var(--amber-text)' },
+    pending: { label: 'Open', dotColor: 'var(--navy-soft)', bg: 'rgba(92, 114, 144, 0.08)', color: 'var(--navy-soft)' },
   };
   const s = map[status] || map.pending;
   return (
     <span style={{
-      fontSize: '11px', fontWeight: 600, padding: '2px 8px',
-      borderRadius: 'var(--radius-full)', background: s.bg, color: s.color
+      fontSize: '11px', fontWeight: 500, padding: '2px 8px',
+      borderRadius: 'var(--radius-full)', background: s.bg, color: s.color,
+      display: 'inline-flex', alignItems: 'center', gap: '5px'
     }}>
+      <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: s.dotColor, flexShrink: 0 }} />
       {s.label}
     </span>
   );
@@ -64,8 +66,8 @@ function IssueCard({ issue, isHighlighted, isSupported, onSupport }) {
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
             <MapPin size={14} color="var(--rose)" style={{ flexShrink: 0, marginTop: '2px' }} />
             <div>
-              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--navy)', lineHeight: 1.2 }}>{primaryLoc}</div>
-              {secondaryLoc && <div style={{ fontSize: '11.5px', color: 'var(--navy-soft)', marginTop: '1px' }}>{secondaryLoc}</div>}
+              <div style={{ fontSize: '14.5px', fontWeight: 700, color: 'var(--navy)', lineHeight: 1.25 }}>{primaryLoc}</div>
+              {secondaryLoc && <div style={{ fontSize: '12px', fontWeight: 400, color: 'var(--navy-soft)', marginTop: '2px' }}>{secondaryLoc}</div>}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
@@ -82,16 +84,16 @@ function IssueCard({ issue, isHighlighted, isSupported, onSupport }) {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '10px', alignItems: 'center' }}>
           {cats.slice(0, 3).map((cat, idx) => (
             <span key={idx} style={{
-              background: 'rgba(22, 86, 224, 0.08)', color: 'var(--blue)',
-              border: '1px solid rgba(22, 86, 224, 0.2)',
+              background: 'transparent', color: 'var(--navy-soft)',
+              border: '1px solid var(--line)',
               padding: '2px 8px', borderRadius: 'var(--radius-full)',
-              fontSize: '11px', fontWeight: 600, textTransform: 'capitalize'
+              fontSize: '11px', fontWeight: 500, textTransform: 'capitalize'
             }}>
               {cat.replace(/_/g, ' ')}
             </span>
           ))}
           <span style={{
-            fontSize: '11px', fontWeight: 700, padding: '2px 8px',
+            fontSize: '11px', fontWeight: 600, padding: '2px 8px',
             borderRadius: 'var(--radius-full)',
             background: priorityScore >= 75 ? 'var(--rose-bg)' : priorityScore >= 40 ? 'var(--amber-bg)' : 'var(--emerald-bg)',
             color: priorityScore >= 75 ? 'var(--rose-text)' : priorityScore >= 40 ? 'var(--amber-text)' : 'var(--emerald-text)',
@@ -100,11 +102,11 @@ function IssueCard({ issue, isHighlighted, isSupported, onSupport }) {
             {priorityLabel} priority · {priorityScore}/100
           </span>
           <span style={{
-            fontSize: '11px', fontWeight: 600,
+            fontSize: '11px', fontWeight: 500,
             marginLeft: 'auto',
-            background: issue.area_type === 'rural' ? 'var(--tag-rural-bg)' : 'var(--tag-urban-bg)',
-            color: issue.area_type === 'rural' ? 'var(--tag-rural-text)' : 'var(--tag-urban-text)',
-            border: `1px solid ${issue.area_type === 'rural' ? 'var(--tag-rural-border)' : 'var(--tag-urban-border)'}`,
+            background: 'transparent',
+            color: 'var(--navy-soft)',
+            border: '1px solid var(--line)',
             padding: '2px 8px', borderRadius: 'var(--radius-full)',
             textTransform: 'capitalize'
           }}>
@@ -114,8 +116,8 @@ function IssueCard({ issue, isHighlighted, isSupported, onSupport }) {
 
         {/* Row 3: short summary */}
         <p style={{
-          fontSize: '14px', fontWeight: 600, color: 'var(--navy)',
-          lineHeight: 1.45, margin: '0 0 14px',
+          fontSize: '13.5px', fontWeight: 400, color: 'var(--navy)',
+          lineHeight: 1.5, margin: '0 0 14px',
           display: '-webkit-box', WebkitLineClamp: 2,
           WebkitBoxOrient: 'vertical', overflow: 'hidden'
         }}>
@@ -222,10 +224,10 @@ function IssueCard({ issue, isHighlighted, isSupported, onSupport }) {
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
               {cats.map((cat, idx) => (
                 <span key={idx} style={{
-                  background: 'rgba(22, 86, 224, 0.08)', color: 'var(--blue)',
-                  border: '1px solid rgba(22, 86, 224, 0.2)',
-                  padding: '3px 9px', borderRadius: 'var(--radius-full)',
-                  fontSize: '11.5px', fontWeight: 600, textTransform: 'capitalize'
+                  background: 'transparent', color: 'var(--navy-soft)',
+                  border: '1px solid var(--line)',
+                  padding: '2px 8px', borderRadius: 'var(--radius-full)',
+                  fontSize: '11px', fontWeight: 500, textTransform: 'capitalize'
                 }}>
                   {cat.replace(/_/g, ' ')}
                 </span>

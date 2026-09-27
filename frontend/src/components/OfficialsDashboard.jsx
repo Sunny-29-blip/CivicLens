@@ -589,13 +589,13 @@ export default function OfficialsDashboard({ session, onLogout }) {
                             </td>
                             <td style={{ padding: '12px' }}>
                               <span style={{
-                                background: 'rgba(22, 86, 224, 0.08)',
-                                color: 'var(--blue)',
-                                border: '1px solid rgba(22, 86, 224, 0.25)',
-                                padding: '3px 9px',
+                                background: 'transparent',
+                                color: 'var(--navy-soft)',
+                                border: '1px solid var(--line)',
+                                padding: '2px 8px',
                                 borderRadius: 'var(--radius-full)',
-                                fontSize: '11.5px',
-                                fontWeight: 600,
+                                fontSize: '11px',
+                                fontWeight: 500,
                                 textTransform: 'capitalize'
                               }}>
                                 {(h.category || '').replace(/_/g, ' ')}
@@ -708,24 +708,34 @@ export default function OfficialsDashboard({ session, onLogout }) {
                                           gap: '10px'
                                         }}>
                                           <div style={{ maxWidth: '600px' }}>
-                                            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--navy)', lineHeight: 1.4 }}>
+                                            <div style={{ fontSize: '13.5px', fontWeight: 500, color: 'var(--navy)', lineHeight: 1.45 }}>
                                               {c.summary || c.raw_text}
                                             </div>
                                             <div style={{ fontSize: '11.5px', color: 'var(--navy-soft)', marginTop: '3px' }}>
-                                              ID: <code>{c.id}</code> · Locality: {c.locality || c.location || h.district} · Priority: <strong>{c.priority_score || 50}/100</strong>
+                                              ID: <code>{c.id}</code> · Locality: {c.locality || c.location || h.district} · Priority: {c.priority_score || 50}/100
                                             </div>
                                           </div>
 
                                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                             <span style={{
                                               fontSize: '11px',
-                                              fontWeight: 600,
+                                              fontWeight: 500,
                                               padding: '2px 8px',
                                               borderRadius: 'var(--radius-full)',
-                                              background: c.status === 'resolved' ? 'var(--emerald-bg)' : c.status === 'in_progress' ? 'var(--amber-bg)' : 'var(--ice)',
-                                              color: c.status === 'resolved' ? '#047857' : c.status === 'in_progress' ? '#b45309' : 'var(--navy)'
+                                              background: c.status === 'resolved' ? 'rgba(5, 150, 105, 0.08)' : c.status === 'in_progress' ? 'rgba(217, 119, 6, 0.08)' : 'rgba(92, 114, 144, 0.08)',
+                                              color: c.status === 'resolved' ? 'var(--emerald-text)' : c.status === 'in_progress' ? 'var(--amber-text)' : 'var(--navy-soft)',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '5px'
                                             }}>
-                                              {(c.status || 'open').toUpperCase()}
+                                              <span style={{
+                                                width: '5px',
+                                                height: '5px',
+                                                borderRadius: '50%',
+                                                background: c.status === 'resolved' ? 'var(--emerald)' : c.status === 'in_progress' ? 'var(--amber)' : 'var(--navy-soft)',
+                                                flexShrink: 0
+                                              }} />
+                                              {c.status === 'resolved' ? 'Resolved' : c.status === 'in_progress' ? 'In Progress' : 'Open'}
                                             </span>
 
                                             <button
@@ -866,13 +876,13 @@ export default function OfficialsDashboard({ session, onLogout }) {
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                               {rawCats.map((cat, idx) => (
                                 <span key={idx} style={{
-                                  background: 'rgba(22, 86, 224, 0.08)',
-                                  color: 'var(--blue)',
-                                  border: '1px solid rgba(22, 86, 224, 0.25)',
+                                  background: 'transparent',
+                                  color: 'var(--navy-soft)',
+                                  border: '1px solid var(--line)',
                                   padding: '2px 7px',
                                   borderRadius: 'var(--radius-full)',
                                   fontSize: '11px',
-                                  fontWeight: 600,
+                                  fontWeight: 500,
                                   textTransform: 'capitalize'
                                 }}>
                                   {cat.replace(/_/g, ' ')}
@@ -881,8 +891,8 @@ export default function OfficialsDashboard({ session, onLogout }) {
                             </div>
                           </td>
                           <td style={{ padding: '12px' }}>
-                            <div style={{ fontWeight: 500 }}>{c.district}, {c.state}</div>
-                            <div style={{ fontSize: '11px', color: 'var(--navy-soft)' }}>{c.locality || c.location}</div>
+                            <div style={{ fontWeight: 600, color: 'var(--navy)', fontSize: '13px' }}>{c.district}, {c.state}</div>
+                            <div style={{ fontSize: '11.5px', color: 'var(--navy-soft)', marginTop: '2px' }}>{c.locality || c.location}</div>
                           </td>
                           <td style={{ padding: '12px' }}>
                             <span className={`urgency-badge ${getPriorityBadgeClass(c.priority_score || 50)}`}>
@@ -892,13 +902,23 @@ export default function OfficialsDashboard({ session, onLogout }) {
                           <td style={{ padding: '12px' }}>
                             <span style={{
                               fontSize: '11px',
-                              fontWeight: 600,
-                              padding: '3px 8px',
+                              fontWeight: 500,
+                              padding: '2px 8px',
                               borderRadius: 'var(--radius-full)',
-                              background: c.status === 'resolved' ? 'var(--emerald-bg)' : c.status === 'in_progress' ? 'var(--amber-bg)' : 'var(--ice)',
-                              color: c.status === 'resolved' ? '#047857' : c.status === 'in_progress' ? '#b45309' : 'var(--navy)'
+                              background: c.status === 'resolved' ? 'rgba(5, 150, 105, 0.08)' : c.status === 'in_progress' ? 'rgba(217, 119, 6, 0.08)' : 'rgba(92, 114, 144, 0.08)',
+                              color: c.status === 'resolved' ? 'var(--emerald-text)' : c.status === 'in_progress' ? 'var(--amber-text)' : 'var(--navy-soft)',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '5px'
                             }}>
-                              {c.status.toUpperCase()}
+                              <span style={{
+                                width: '5px',
+                                height: '5px',
+                                borderRadius: '50%',
+                                background: c.status === 'resolved' ? 'var(--emerald)' : c.status === 'in_progress' ? 'var(--amber)' : 'var(--navy-soft)',
+                                flexShrink: 0
+                              }} />
+                              {c.status === 'resolved' ? 'Resolved' : c.status === 'in_progress' ? 'In Progress' : 'Open'}
                             </span>
                           </td>
                           <td style={{ padding: '12px' }}>
