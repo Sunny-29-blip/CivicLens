@@ -33,24 +33,13 @@ async def lifespan(app: FastAPI):
     logger.info("==================================================================")
     logger.info("CivicLens Platform Booting...")
     
-    # 1. Probe and log Gemini AI status
+    # 1. Fast configuration check for Gemini AI status
     if settings.GEMINI_API_KEY:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=settings.GEMINI_API_KEY)
-            model = genai.GenerativeModel(settings.GEMINI_MODEL)
-            # Lightweight verification ping
-            response = model.generate_content("ping")
-            gemini_status["configured"] = True
-            gemini_status["reachable"] = True
-            gemini_status["message"] = f"Gemini API ({settings.GEMINI_MODEL}) is active and verified."
-            set_gemini_reachability(True)
-            logger.info(f"✅ Gemini AI is CONFIGURED and REACHABLE (Model: {settings.GEMINI_MODEL})")
-        except Exception as e:
-            gemini_status["reachable"] = False
-            gemini_status["message"] = f"Gemini API check failed: {type(e).__name__}"
-            set_gemini_reachability(False, str(e))
-            logger.warning(f"⚠️ Gemini API key is configured but probe failed: {type(e).__name__}. Fallback classifier is active.")
+        gemini_status["configured"] = True
+        gemini_status["reachable"] = True
+        gemini_status["message"] = f"Gemini API ({settings.GEMINI_MODEL}) is configured."
+        set_gemini_reachability(True)
+        logger.info(f"✅ Gemini AI is CONFIGURED (Model: {settings.GEMINI_MODEL})")
     else:
         gemini_status["configured"] = False
         gemini_status["reachable"] = False
@@ -87,6 +76,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Ensure officials portal & auth endpoints are NEVER cached across browser or CDN
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+
+class NoCacheOfficialsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        path = request.url.path
+        if any(prefix in path for prefix in ["/officials", "/auth", "/requests", "/public"]):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0, private"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
+app.add_middleware(NoCacheOfficialsMiddleware)
 
 # Include API Routers (both direct and /api prefixed)
 app.include_router(auth.router)

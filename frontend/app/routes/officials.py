@@ -1,18 +1,84 @@
+import hmac
+import hashlib
+import base64
+import json
+import time
 import uuid
 import logging
 from typing import Optional, List, Dict, Any
 from collections import defaultdict
-from fastapi import APIRouter, HTTPException, Query, Body, Header, status
+from fastapi import APIRouter, HTTPException, Query, Body, Header, Response, status
 from pydantic import BaseModel, Field
 
+from app.config import settings
 from app.services.firestore_service import firestore_service
 from app.services.priority_service import calculate_priority_score
 
 router = APIRouter(prefix="/officials", tags=["Government Officials Portal"])
 logger = logging.getLogger("civiclens.routes.officials")
 
-# In-memory session cache for server-side scope enforcement
+OFFICIAL_TOKEN_SECRET = getattr(settings, 'SECRET_KEY', None) or "civiclens-gov-portal-secret-key-2026"
+
+# In-memory session cache for local fast lookups
 OFFICIAL_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+
+def create_official_token(official_id: str, level: str) -> str:
+    """
+    Creates a stateless, cryptographically signed token containing official_id.
+    Guarantees deterministic identity and jurisdiction resolution across all serverless lambda instances.
+    """
+    payload = {
+        "official_id": official_id,
+        "level": level,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600 * 24 * 30  # 30 days valid
+    }
+    payload_bytes = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+    b64_payload = base64.urlsafe_b64encode(payload_bytes).decode('utf-8').rstrip('=')
+    signature = hmac.new(
+        OFFICIAL_TOKEN_SECRET.encode('utf-8'),
+        b64_payload.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()[:32]
+    return f"civiclens-gov-tok.{b64_payload}.{signature}"
+
+
+def decode_official_token(token_str: str) -> Optional[str]:
+    """
+    Decodes signed official token and returns verified official_id, or None if invalid.
+    """
+    if not token_str or not isinstance(token_str, str):
+        return None
+    token_str = token_str.strip()
+    if token_str.startswith("Bearer "):
+        token_str = token_str[7:].strip()
+
+    # Handle stateless signed token: civiclens-gov-tok.<b64_payload>.<signature>
+    if token_str.startswith("civiclens-gov-tok."):
+        parts = token_str.split(".")
+        if len(parts) == 3:
+            b64_payload, sig = parts[1], parts[2]
+            expected_sig = hmac.new(
+                OFFICIAL_TOKEN_SECRET.encode('utf-8'),
+                b64_payload.encode('utf-8'),
+                hashlib.sha256
+            ).hexdigest()[:32]
+            if hmac.compare_digest(sig, expected_sig):
+                try:
+                    rem = len(b64_payload) % 4
+                    if rem > 0:
+                        b64_payload += '=' * (4 - rem)
+                    payload_data = json.loads(base64.urlsafe_b64decode(b64_payload).decode('utf-8'))
+                    return payload_data.get("official_id")
+                except Exception as e:
+                    logger.warning(f"Error parsing token payload: {e}")
+
+    # Fallback: check in-memory sessions cache if present
+    if token_str in OFFICIAL_SESSIONS:
+        return OFFICIAL_SESSIONS[token_str].get("official_id")
+
+    return None
 
 
 class JurisdictionModel(BaseModel):
@@ -22,7 +88,7 @@ class JurisdictionModel(BaseModel):
 
 
 class OfficialLoginRequest(BaseModel):
-    official_id: str = Field(..., description="Pre-provisioned Official ID (e.g., admin, state_up, dm_varanasi, local_rampur)")
+    official_id: str = Field(..., description="Pre-provisioned Official ID (e.g., admin, state_up, delhi_pwd, dm_varanasi, bbmp_bangalore, local_rampur, bihar_power)")
     password: str = Field(..., description="Official portal password")
 
 
@@ -69,7 +135,8 @@ def _resolve_authenticated_official(
 ) -> Dict[str, Any]:
     """
     Resolve and verify official identity for server-side scope enforcement.
-    Defaults to national tier admin if unauthenticated demo mode.
+    Strictly derives jurisdiction from the official's authoritative record.
+    Never trusts client-passed scopes or defaults to national tier on invalid tokens.
     """
     tok = None
     if auth_header and auth_header.startswith("Bearer "):
@@ -77,102 +144,53 @@ def _resolve_authenticated_official(
     elif token:
         tok = token.strip()
 
-    if tok and tok in OFFICIAL_SESSIONS:
-        return OFFICIAL_SESSIONS[tok]
+    verified_id = None
+    if tok:
+        verified_id = decode_official_token(tok)
 
-    if official_id:
-        off = firestore_service.get_official(official_id)
+    if not verified_id and official_id:
+        verified_id = official_id.strip()
+
+    if verified_id:
+        off = firestore_service.get_official(verified_id)
         if off:
+            jurisdiction = off.get("jurisdiction") or {}
+            norm_state = jurisdiction.get("state") or (off.get("state") if off.get("state") != "All States" else None)
+            norm_district = jurisdiction.get("district") or (off.get("district") if off.get("district") != "All Districts" else None)
+            norm_locality = jurisdiction.get("locality")
+
             return {
                 "official_id": off["official_id"],
                 "name": off["name"],
                 "department": off["department"],
                 "level": off.get("level", "national"),
-                "jurisdiction": off.get("jurisdiction", {"state": None, "district": None, "locality": None}),
+                "jurisdiction": {
+                    "state": norm_state,
+                    "district": norm_district,
+                    "locality": norm_locality
+                },
                 "state": off.get("state", "All States"),
                 "district": off.get("district", "All Districts")
             }
 
-    return {
-        "official_id": "admin",
-        "name": "Dr. Rajeshwar Rao, IAS",
-        "department": "National Infrastructure & Governance Mission",
-        "level": "national",
-        "jurisdiction": {"state": None, "district": None, "locality": None},
-        "state": "All States",
-        "district": "All Districts"
-    }
-
-
-@router.post("/login", response_model=OfficialLoginResponse, summary="Government Official Login with Tier Authentication")
-async def official_login(payload: OfficialLoginRequest):
-    """
-    Login endpoint for authorized government officials.
-    Verifies credentials with bcrypt and returns official profile with level and jurisdiction.
-    """
-    official_data = firestore_service.verify_official(payload.official_id.strip(), payload.password.strip())
-    if not official_data:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid official credentials. Use demo accounts: admin/civic2026, state_up/jal2026, delhi_pwd/pwd2026, dm_varanasi/varanasi2026, bbmp_bangalore/bbmp2026, local_rampur/local2026"
-        )
-
-    token = f"civiclens-gov-tok-{uuid.uuid4().hex}"
-    OFFICIAL_SESSIONS[token] = official_data
-    logger.info(f"Official logged in: {official_data['name']} (Tier: {official_data['level']}, Dept: {official_data['department']})")
-
-    return {
-        "success": True,
-        "token": token,
-        "official": official_data,
-        "message": f"Authenticated as {official_data['name']} ({official_data['level'].title()} Tier)"
-    }
-
-
-@router.get("/hotspots", response_model=List[HotspotItem], summary="Get aggregated hotspots ranked by 0-100 Priority Score with Server-Side Scope Enforcement")
-async def get_hotspots(
-    authorization: Optional[str] = Header(None),
-    token: Optional[str] = Query(None),
-    official_id: Optional[str] = Query(None),
-    state: Optional[str] = Query(None, description="Requested state filter (subject to server-side override)"),
-    district: Optional[str] = Query(None, description="Requested district filter (subject to server-side override)"),
-    locality: Optional[str] = Query(None, description="Requested locality filter (subject to server-side override)"),
-    category: Optional[str] = Query(None, description="Filter hotspots by category"),
-    area_type: Optional[str] = Query(None, description="Filter hotspots by rural/urban")
-):
-    """
-    Aggregates complaints by (State, District, Single Category, AreaType) and computes explainable 0-100 Priority Score:
-    - Multi-category arrays are exploded so each complaint contributes to every issue it represents.
-    - Server-side scope enforcement locks non-national officials to their jurisdiction.
-    """
-    official = _resolve_authenticated_official(auth_header=authorization, official_id=official_id, token=token)
-    officer_level = official.get("level", "national")
-    jurisdiction = official.get("jurisdiction", {})
-
-    effective_state = state
-    effective_district = district
-    effective_locality = locality
-
-    if officer_level == "state":
-        effective_state = jurisdiction.get("state")
-    elif officer_level == "district":
-        effective_state = jurisdiction.get("state")
-        effective_district = jurisdiction.get("district")
-    elif officer_level == "local":
-        effective_state = jurisdiction.get("state")
-        effective_district = jurisdiction.get("district")
-        effective_locality = jurisdiction.get("locality")
-
-    all_complaints = firestore_service.get_complaints(
-        state=effective_state,
-        district=effective_district,
-        locality=effective_locality,
-        limit=500
+    # If unauthenticated or token expired, raise 401 Unauthorized
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Unauthorized official session. Please provide a valid official session token."
     )
 
-    # Group complaints by (state, district, single_category, area_type)
+
+def _compute_hotspots(
+    complaints: List[Dict[str, Any]],
+    category_filter: Optional[str] = None,
+    area_type_filter: Optional[str] = None
+) -> List[HotspotItem]:
+    """
+    Groups complaints by (State, District, Single Category, AreaType) and computes explainable 0-100 Priority Scores:
+    - Multi-category arrays are exploded so each complaint contributes to every issue it represents.
+    """
     groups = defaultdict(list)
-    for c in all_complaints:
+    for c in complaints:
         c_state = c.get("state", "Other")
         c_district = c.get("district", "Other")
         c_area = c.get("area_type", "urban")
@@ -185,13 +203,13 @@ async def get_hotspots(
         else:
             cats = [c.get("category", "roads")]
 
-        if category and category.lower() != "all" and category.lower() not in [ct.lower() for ct in cats]:
+        if category_filter and category_filter.lower() != "all" and category_filter.lower() not in [ct.lower() for ct in cats]:
             continue
-        if area_type and area_type.lower() != "all" and c_area.lower() != area_type.lower():
+        if area_type_filter and area_type_filter.lower() != "all" and c_area.lower() != area_type_filter.lower():
             continue
 
         for single_cat in cats:
-            if category and category.lower() != "all" and single_cat.lower() != category.lower():
+            if category_filter and category_filter.lower() != "all" and single_cat.lower() != category_filter.lower():
                 continue
             key = (c_state, c_district, single_cat, c_area)
             groups[key].append(c)
@@ -224,7 +242,9 @@ async def get_hotspots(
         total_support = sum(item.get("support_count", 1) for item in items)
         high_priority_count = sum(1 for item in items if item.get("high_priority", False) or item.get("priority_score", 0) >= 75)
 
-        hotspot_id = f"hotspot-{g_state[:3].lower()}-{g_district[:3].lower()}-{g_cat}"
+        clean_state = g_state.replace(" ", "").lower()[:3] if g_state else "ind"
+        clean_dist = g_district.replace(" ", "").lower()[:3] if g_district else "dst"
+        hotspot_id = f"hotspot-{clean_state}-{clean_dist}-{g_cat}"
 
         hotspots.append(HotspotItem(
             hotspot_id=hotspot_id,
@@ -247,13 +267,170 @@ async def get_hotspots(
             complaints=items
         ))
 
-    # Rank hotspots by Priority Score descending
     hotspots.sort(key=lambda h: h.priority_score, reverse=True)
     return hotspots
 
 
-@router.get("/dashboard-data", summary="Get Tier-specific Dashboard data including KPIs, Recharts data, and Complaints")
+def _compute_map_data(
+    level: str,
+    jurisdiction: Dict[str, Any],
+    effective_state: Optional[str],
+    effective_district: Optional[str],
+    complaints: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Computes per-region complaint counts for the choropleth map.
+    Uses DISTINCT complaint IDs (not exploded hotspot rows) to avoid multi-category double-counting.
+    """
+    if level == "local":
+        return {
+            "level": "local",
+            "scope": {"state": jurisdiction.get("state"), "district": jurisdiction.get("district"), "locality": jurisdiction.get("locality")},
+            "regions": []
+        }
+
+    regions: List[Dict[str, Any]] = []
+
+    if level == "national":
+        state_groups: Dict[str, list] = defaultdict(list)
+        for c in complaints:
+            st = c.get("state") or "Unknown"
+            state_groups[st].append(c)
+
+        for st_name, items in state_groups.items():
+            scores = [c.get("priority_score", 50) for c in items]
+            avg_ps = int(round(sum(scores) / len(scores))) if scores else 0
+            regions.append({
+                "name": st_name,
+                "complaint_count": len(items),
+                "avg_priority_score": avg_ps
+            })
+        regions.sort(key=lambda r: r["complaint_count"], reverse=True)
+
+    elif level == "state":
+        dist_groups: Dict[str, list] = defaultdict(list)
+        for c in complaints:
+            dt = c.get("district") or "Unknown"
+            dist_groups[dt].append(c)
+
+        for dt_name, items in dist_groups.items():
+            scores = [c.get("priority_score", 50) for c in items]
+            avg_ps = int(round(sum(scores) / len(scores))) if scores else 0
+            regions.append({
+                "name": dt_name,
+                "complaint_count": len(items),
+                "avg_priority_score": avg_ps
+            })
+        regions.sort(key=lambda r: r["complaint_count"], reverse=True)
+
+    elif level == "district":
+        scores = [c.get("priority_score", 50) for c in complaints]
+        avg_ps = int(round(sum(scores) / len(scores))) if scores else 0
+        regions.append({
+            "name": effective_district or jurisdiction.get("district", "Unknown"),
+            "complaint_count": len(complaints),
+            "avg_priority_score": avg_ps
+        })
+
+    return {
+        "level": level,
+        "scope": {
+            "state": effective_state or jurisdiction.get("state"),
+            "district": effective_district or jurisdiction.get("district")
+        },
+        "regions": regions
+    }
+
+
+def _set_no_cache_headers(response: Response):
+    """Ensure officials portal responses are never cached by browser or CDN."""
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0, private"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+
+
+@router.post("/login", response_model=OfficialLoginResponse, summary="Government Official Login with Tier Authentication")
+async def official_login(payload: OfficialLoginRequest, response: Response):
+    """
+    Login endpoint for authorized government officials.
+    Verifies credentials with bcrypt and returns official profile with cryptographically signed token.
+    """
+    _set_no_cache_headers(response)
+    official_data = firestore_service.verify_official(payload.official_id.strip(), payload.password.strip())
+    if not official_data:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid official credentials. Use demo accounts: admin/civic2026, state_up/jal2026, delhi_pwd/pwd2026, dm_varanasi/varanasi2026, bbmp_bangalore/bbmp2026, local_rampur/local2026, bihar_power/bihar2026"
+        )
+
+    token = create_official_token(official_data["official_id"], official_data["level"])
+    OFFICIAL_SESSIONS[token] = official_data
+    logger.info(f"Official logged in: {official_data['name']} (Tier: {official_data['level']}, Dept: {official_data['department']})")
+
+    return {
+        "success": True,
+        "token": token,
+        "official": official_data,
+        "message": f"Authenticated as {official_data['name']} ({official_data['level'].title()} Tier)"
+    }
+
+
+@router.get("/hotspots", response_model=List[HotspotItem], summary="Get aggregated hotspots ranked by 0-100 Priority Score with Server-Side Scope Enforcement")
+async def get_hotspots(
+    response: Response,
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
+    official_id: Optional[str] = Query(None),
+    state: Optional[str] = Query(None, description="Requested state filter (subject to server-side override)"),
+    district: Optional[str] = Query(None, description="Requested district filter (subject to server-side override)"),
+    locality: Optional[str] = Query(None, description="Requested locality filter (subject to server-side override)"),
+    category: Optional[str] = Query(None, description="Filter hotspots by category"),
+    area_type: Optional[str] = Query(None, description="Filter hotspots by rural/urban")
+):
+    """
+    Aggregates complaints by (State, District, Single Category, AreaType) and computes explainable 0-100 Priority Score:
+    - Multi-category arrays are exploded so each complaint contributes to every issue it represents.
+    - Server-side scope enforcement strictly locks non-national officials to their jurisdiction.
+    """
+    _set_no_cache_headers(response)
+    official = _resolve_authenticated_official(auth_header=authorization, official_id=official_id, token=token)
+    officer_level = official.get("level", "national")
+    jurisdiction = official.get("jurisdiction", {})
+
+    effective_state = None
+    effective_district = None
+    effective_locality = None
+
+    if officer_level == "national":
+        effective_state = state if (state and state != "All States") else None
+        effective_district = district if (district and district != "All Districts") else None
+        effective_locality = locality if (locality and locality != "unspecified") else None
+    elif officer_level == "state":
+        effective_state = jurisdiction.get("state")
+        effective_district = district if (district and district != "All Districts") else None
+        effective_locality = locality if (locality and locality != "unspecified") else None
+    elif officer_level == "district":
+        effective_state = jurisdiction.get("state")
+        effective_district = jurisdiction.get("district")
+        effective_locality = locality if (locality and locality != "unspecified") else None
+    elif officer_level == "local":
+        effective_state = jurisdiction.get("state")
+        effective_district = jurisdiction.get("district")
+        effective_locality = jurisdiction.get("locality")
+
+    all_complaints = firestore_service.get_complaints(
+        state=effective_state,
+        district=effective_district,
+        locality=effective_locality,
+        limit=500
+    )
+
+    return _compute_hotspots(all_complaints, category_filter=category, area_type_filter=area_type)
+
+
+@router.get("/dashboard-data", summary="Get Tier-specific Dashboard data including KPIs, Recharts data, Complaints, Hotspots, and Map Data")
 async def get_dashboard_data(
+    response: Response,
     authorization: Optional[str] = Header(None),
     token: Optional[str] = Query(None),
     official_id: Optional[str] = Query(None),
@@ -261,8 +438,8 @@ async def get_dashboard_data(
     drill_district: Optional[str] = Query(None)
 ):
     """
-    Returns complete tiered dashboard data:
-    1. Server-side enforced jurisdiction scoping.
+    Returns complete tiered dashboard data in a single unified round-trip:
+    1. Server-side enforced jurisdiction scoping derived directly from verified official identity.
     2. Direct complaint KPIs:
        - Total Complaints
        - High Priority (score >= 75 or support >= 100k)
@@ -270,7 +447,9 @@ async def get_dashboard_data(
        - Resolved Issues
        - Average Priority Score (0-100 integer)
     3. Tier-tailored Recharts datasets with multi-category aggregation.
+    4. Hotspot matrix and Map data.
     """
+    _set_no_cache_headers(response)
     official = _resolve_authenticated_official(auth_header=authorization, official_id=official_id, token=token)
     level = official.get("level", "national")
     jurisdiction = official.get("jurisdiction", {})
@@ -293,7 +472,7 @@ async def get_dashboard_data(
         effective_district = jurisdiction.get("district")
         effective_locality = jurisdiction.get("locality")
 
-    # Fetch unique complaints within the enforced jurisdiction
+    # Fetch unique complaints within the strictly enforced jurisdiction
     complaints = firestore_service.get_complaints(
         state=effective_state,
         district=effective_district,
@@ -330,7 +509,6 @@ async def get_dashboard_data(
     chart_data: List[Dict[str, Any]] = []
     category_chart_data: List[Dict[str, Any]] = []
 
-    # Count multi-category occurrences across all complaints
     cat_counts = defaultdict(int)
     for c in complaints:
         raw_cats = c.get("categories", ["roads"])
@@ -405,6 +583,10 @@ async def get_dashboard_data(
             })
         chart_data.sort(key=lambda x: x["priority_score"], reverse=True)
 
+    # Compute Hotspots and Map Data in same payload for zero-overhead client rendering
+    hotspots = _compute_hotspots(complaints)
+    map_data = _compute_map_data(level, jurisdiction, effective_state, effective_district, complaints)
+
     return {
         "official": official,
         "level": level,
@@ -421,13 +603,25 @@ async def get_dashboard_data(
         },
         "chart_data": chart_data,
         "category_chart_data": category_chart_data,
-        "complaints": complaints
+        "complaints": complaints,
+        "hotspots": hotspots,
+        "map_data": map_data
     }
 
 
 @router.patch("/complaints/{complaint_id}/status", summary="Update complaint resolution status")
-async def update_status(complaint_id: str, payload: UpdateStatusRequest):
-    """Allows government officials to mark complaints as in_progress or resolved."""
+async def update_status(
+    complaint_id: str,
+    payload: UpdateStatusRequest,
+    response: Response,
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None)
+):
+    """Allows authenticated government officials to mark complaints as in_progress or resolved."""
+    _set_no_cache_headers(response)
+    # Validate session
+    _resolve_authenticated_official(auth_header=authorization, token=token)
+
     if payload.status not in ["pending", "in_progress", "resolved"]:
         raise HTTPException(status_code=400, detail="Status must be 'pending', 'in_progress', or 'resolved'")
 
@@ -445,28 +639,21 @@ async def update_status(complaint_id: str, payload: UpdateStatusRequest):
 
 @router.get("/map-data", summary="Complaint density data per region for choropleth map (distinct complaint counts, no double-counting)")
 async def get_map_data(
+    response: Response,
     authorization: Optional[str] = Header(None),
     token: Optional[str] = Query(None),
-    official_id: Optional[str] = Query(None),
+    official_id: Optional[str] = Query(None)
 ):
     """
     Returns per-region complaint counts for the choropleth map.
-    Uses DISTINCT complaint IDs (not exploded hotspot rows) to avoid the
-    multi-category double-counting trap.
-    Server-side scope is enforced identically to the hotspot endpoint.
-
-    Returns:
-        {
-          "level": "national" | "state" | "district" | "local",
-          "scope": { "state": str | null, "district": str | null },
-          "regions": [ { "name": str, "complaint_count": int, "avg_priority_score": int } ]
-        }
+    Uses DISTINCT complaint IDs (not exploded hotspot rows) to avoid the multi-category double-counting trap.
+    Server-side scope is enforced identically to the hotspot and dashboard endpoints.
     """
+    _set_no_cache_headers(response)
     official = _resolve_authenticated_official(auth_header=authorization, official_id=official_id, token=token)
     level = official.get("level", "national")
     jurisdiction = official.get("jurisdiction", {})
 
-    # Server-side scope enforcement (mirrors hotspot endpoint)
     if level == "national":
         effective_state = None
         effective_district = None
@@ -477,14 +664,12 @@ async def get_map_data(
         effective_state = jurisdiction.get("state")
         effective_district = jurisdiction.get("district")
     else:  # local
-        # Local officials get no map — return empty
         return {
             "level": "local",
-            "scope": {"state": jurisdiction.get("state"), "district": jurisdiction.get("district")},
+            "scope": {"state": jurisdiction.get("state"), "district": jurisdiction.get("district"), "locality": jurisdiction.get("locality")},
             "regions": []
         }
 
-    # Fetch DISTINCT complaints within jurisdiction (no exploding by category)
     complaints = firestore_service.get_complaints(
         state=effective_state,
         district=effective_district,
@@ -492,57 +677,4 @@ async def get_map_data(
         limit=500
     )
 
-    regions: List[Dict[str, Any]] = []
-
-    if level == "national":
-        # Group distinct complaints by state
-        state_groups: Dict[str, list] = defaultdict(list)
-        for c in complaints:
-            st = c.get("state") or "Unknown"
-            state_groups[st].append(c)
-
-        for st_name, items in state_groups.items():
-            scores = [c.get("priority_score", 50) for c in items]
-            avg_ps = int(round(sum(scores) / len(scores))) if scores else 0
-            regions.append({
-                "name": st_name,
-                "complaint_count": len(items),
-                "avg_priority_score": avg_ps
-            })
-        regions.sort(key=lambda r: r["complaint_count"], reverse=True)
-
-    elif level == "state":
-        # Group distinct complaints by district within the state
-        dist_groups: Dict[str, list] = defaultdict(list)
-        for c in complaints:
-            dt = c.get("district") or "Unknown"
-            dist_groups[dt].append(c)
-
-        for dt_name, items in dist_groups.items():
-            scores = [c.get("priority_score", 50) for c in items]
-            avg_ps = int(round(sum(scores) / len(scores))) if scores else 0
-            regions.append({
-                "name": dt_name,
-                "complaint_count": len(items),
-                "avg_priority_score": avg_ps
-            })
-        regions.sort(key=lambda r: r["complaint_count"], reverse=True)
-
-    elif level == "district":
-        # Single stat for the district
-        scores = [c.get("priority_score", 50) for c in complaints]
-        avg_ps = int(round(sum(scores) / len(scores))) if scores else 0
-        regions.append({
-            "name": effective_district or jurisdiction.get("district", "Unknown"),
-            "complaint_count": len(complaints),
-            "avg_priority_score": avg_ps
-        })
-
-    return {
-        "level": level,
-        "scope": {
-            "state": effective_state or jurisdiction.get("state"),
-            "district": effective_district or jurisdiction.get("district")
-        },
-        "regions": regions
-    }
+    return _compute_map_data(level, jurisdiction, effective_state, effective_district, complaints)

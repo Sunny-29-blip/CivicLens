@@ -1081,7 +1081,7 @@ class FirestoreService:
     # --- Officials Methods ---
 
     def get_official(self, official_id: str) -> Optional[Dict[str, Any]]:
-        """Lookup official profile from Cloud Firestore or local storage."""
+        """Lookup official profile from Cloud Firestore, local storage, or fallback seed list."""
         if self.use_cloud_firestore and self.db:
             try:
                 doc = self.db.collection(OFFICIALS_COLLECTION).document(official_id).get()
@@ -1090,8 +1090,15 @@ class FirestoreService:
             except Exception as e:
                 logger.error(f"Firestore official lookup error: {e}")
 
-        data = self._load_local_data()
-        for o in data.get(OFFICIALS_COLLECTION, []):
+        try:
+            data = self._load_local_data()
+            for o in data.get(OFFICIALS_COLLECTION, []):
+                if o.get("official_id") == official_id:
+                    return o
+        except Exception:
+            pass
+
+        for o in INITIAL_OFFICIALS:
             if o.get("official_id") == official_id:
                 return o
         return None

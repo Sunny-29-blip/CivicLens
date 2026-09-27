@@ -87,18 +87,28 @@ export default function OfficialsDashboard({ session, onLogout }) {
   const level = official.level || 'national';
 
   const loadData = async () => {
+    if (!token) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      const [dashRes, hotRes] = await Promise.all([
-        api.getDashboardData(token, drillState || null, drillDistrict || null),
-        api.getHotspots(token, {
-          state: drillState || undefined,
-          district: drillDistrict || undefined,
-          category: categoryFilter || undefined
-        })
-      ]);
-      setDashboardData(dashRes);
-      setHotspots(hotRes || []);
+      if (categoryFilter) {
+        const [dashRes, hotRes] = await Promise.all([
+          api.getDashboardData(token, drillState || null, drillDistrict || null),
+          api.getHotspots(token, {
+            state: drillState || undefined,
+            district: drillDistrict || undefined,
+            category: categoryFilter || undefined
+          })
+        ]);
+        setDashboardData(dashRes);
+        setHotspots(hotRes || []);
+      } else {
+        const dashRes = await api.getDashboardData(token, drillState || null, drillDistrict || null);
+        setDashboardData(dashRes);
+        setHotspots(dashRes.hotspots || []);
+      }
     } catch (err) {
       console.error('Failed to load officials dashboard data:', err);
     } finally {
@@ -107,8 +117,10 @@ export default function OfficialsDashboard({ session, onLogout }) {
   };
 
   useEffect(() => {
-    loadData();
-  }, [drillState, drillDistrict, categoryFilter]);
+    if (token) {
+      loadData();
+    }
+  }, [token, drillState, drillDistrict, categoryFilter]);
 
   const handleUpdateStatus = async (complaintId, newStatus) => {
     setUpdatingId(complaintId);
@@ -461,7 +473,7 @@ export default function OfficialsDashboard({ session, onLogout }) {
           {/* India Choropleth Map — wrapped in error boundary (Part A + P) */}
           <div style={{ marginBottom: '28px' }}>
             <MapErrorBoundary>
-              <IndiaMap token={token} />
+              <IndiaMap token={token} mapData={dashboardData?.map_data} />
             </MapErrorBoundary>
           </div>
         </>

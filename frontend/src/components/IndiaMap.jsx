@@ -439,17 +439,23 @@ function ChoroplethMap({ geoData, isNational, scopeState, dataMap, maxCount }) {
 }
 
 /* ─── Main IndiaMap component ─────────────────────────────────────────────── */
-export default function IndiaMap({ token }) {
-  const [mapData, setMapData] = React.useState(null);
+export default function IndiaMap({ token, mapData: externalMapData }) {
+  const [internalMapData, setInternalMapData] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [loaded, setLoaded] = React.useState(false);
 
+  const mapData = externalMapData || internalMapData;
+
   React.useEffect(() => {
+    if (externalMapData) {
+      setLoaded(true);
+      return;
+    }
     if (!token) { setLoaded(true); return; }
     api.getMapData(token)
-      .then(data => { setMapData(data); setLoaded(true); })
+      .then(data => { setInternalMapData(data); setLoaded(true); })
       .catch(err => { setError(err.message); setLoaded(true); });
-  }, [token]);
+  }, [token, externalMapData]);
 
   // Build lookup map
   const dataMap = React.useMemo(() => {

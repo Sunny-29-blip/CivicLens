@@ -587,58 +587,54 @@ async def classify_complaint_with_gemini(
         return _heuristic_classify(text, state_hint=state_hint, district_hint=district_hint)
 
     try:
-        # Attempt primary classification via google-genai SDK
-        try:
-            from google import genai
-            from google.genai import types
+        # Attempt classification via candidate active Gemini models
+        candidate_models = [
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.5-flash",
+            settings.GEMINI_MODEL or "gemini-3.8-flash",
+            "gemini-flash-latest"
+        ]
+        
+        parsed_dict = None
+        last_exception = None
 
-            client = genai.Client(api_key=api_key)
-            model_name = settings.GEMINI_MODEL or "gemini-3.6-flash"
+        import google.generativeai as legacy_genai
+        legacy_genai.configure(api_key=api_key)
 
-            response = client.models.generate_content(
-                model=model_name,
-                contents=f"Analyze this citizen complaint for multi-label civic issues:\n\n\"\"\"\n{text}\n\"\"\"",
-                config=types.GenerateContentConfig(
+        for model_name in candidate_models:
+            if not model_name:
+                continue
+            try:
+                model = legacy_genai.GenerativeModel(
+                    model_name=model_name,
                     system_instruction=SYSTEM_PROMPT,
-                    response_mime_type="application/json",
-                    response_schema=GeminiClassificationSchema,
-                    temperature=0.1
+                    generation_config={"response_mime_type": "application/json", "temperature": 0.1}
                 )
-            )
-            raw_json_str = response.text.strip()
-            parsed_dict = json.loads(raw_json_str)
-            parsed_dict["classified_by"] = "gemini"
+                user_prompt = f"Analyze this citizen complaint:\n\n\"\"\"\n{text}\n\"\"\""
+                legacy_resp = model.generate_content(user_prompt)
+                cleaned_json = legacy_resp.text.strip()
+                if cleaned_json.startswith("```json"):
+                    cleaned_json = cleaned_json[7:]
+                if cleaned_json.startswith("```"):
+                    cleaned_json = cleaned_json[3:]
+                if cleaned_json.endswith("```"):
+                    cleaned_json = cleaned_json[:-3]
+                parsed_dict = json.loads(cleaned_json.strip())
+                parsed_dict["classified_by"] = "gemini"
 
-            _runtime_gemini_state["gemini_success_count"] += 1
-            _runtime_gemini_state["last_used"] = "gemini"
-            _runtime_gemini_state["reachable"] = True
+                _runtime_gemini_state["gemini_success_count"] += 1
+                _runtime_gemini_state["last_used"] = f"gemini ({model_name})"
+                _runtime_gemini_state["reachable"] = True
+                _runtime_gemini_state["model"] = model_name
+                logger.info(f"Successfully classified with Gemini model: {model_name}")
+                break
+            except Exception as model_err:
+                last_exception = model_err
+                logger.warning(f"Gemini model {model_name} failed: {type(model_err).__name__}. Trying next model...")
 
-        except Exception as genai_err:
-            # Fallback adapter to google.generativeai if google-genai throws
-            logger.info(f"GenAI SDK notice: {type(genai_err).__name__}. Attempting generativeai adapter...")
-            import google.generativeai as legacy_genai
-            legacy_genai.configure(api_key=api_key)
-
-            model = legacy_genai.GenerativeModel(
-                model_name=settings.GEMINI_MODEL or "gemini-3.6-flash",
-                system_instruction=SYSTEM_PROMPT,
-                generation_config={"response_mime_type": "application/json", "temperature": 0.1}
-            )
-            user_prompt = f"Analyze this citizen complaint:\n\n\"\"\"\n{text}\n\"\"\""
-            legacy_resp = model.generate_content(user_prompt)
-            cleaned_json = legacy_resp.text.strip()
-            if cleaned_json.startswith("```json"):
-                cleaned_json = cleaned_json[7:]
-            if cleaned_json.startswith("```"):
-                cleaned_json = cleaned_json[3:]
-            if cleaned_json.endswith("```"):
-                cleaned_json = cleaned_json[:-3]
-            parsed_dict = json.loads(cleaned_json.strip())
-            parsed_dict["classified_by"] = "gemini"
-
-            _runtime_gemini_state["gemini_success_count"] += 1
-            _runtime_gemini_state["last_used"] = "gemini"
-            _runtime_gemini_state["reachable"] = True
+        if parsed_dict is None:
+            raise last_exception or Exception("All Gemini models exhausted")
 
         # Stage 2: Merge, Validate, Normalize Location, Calculate Priority
         validated = _two_stage_merge_and_validate(
