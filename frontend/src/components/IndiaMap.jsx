@@ -16,7 +16,7 @@ import {
   Geography
 } from 'react-simple-maps';
 import { geoMercator } from 'd3-geo';
-import { Map as MapIcon, AlertCircle } from 'lucide-react';
+import { Map as MapIcon, AlertCircle, Info } from 'lucide-react';
 import statesGeoData from '../data/india_states.json';
 import districtsGeoData from '../data/india_districts.json';
 
@@ -93,7 +93,11 @@ const DISTRICT_ALIASES = {
   'south': 'south delhi',
   'south east': 'south east delhi',
   'new delhi': 'new delhi',
-  'shahdara': 'shahdara',
+  'shahdara': 'north east delhi',
+  'north east delhi shahdara': 'north east delhi',
+  'old delhi': 'central delhi',
+  'central north delhi': 'north delhi',
+  'outer north delhi': 'north west delhi',
   'delhi': 'central delhi'
 };
 
@@ -603,6 +607,28 @@ export default function IndiaMap({ token, mapData: externalMapData }) {
       <div style={{ marginTop: '10px', fontSize: '13px', color: 'var(--navy-soft)' }}>
         Shading based on complaint count per region · Hover to inspect exact figures
       </div>
+
+      {/* Delhi 2026 Reorganization Data Provenance Notice */}
+      {scopeState === 'delhi' && (
+        <div style={{
+          marginTop: '12px',
+          padding: '10px 14px',
+          background: 'rgba(22, 86, 224, 0.05)',
+          border: '1px solid rgba(22, 86, 224, 0.2)',
+          borderRadius: 'var(--radius-sm)',
+          fontSize: '12px',
+          color: 'var(--navy)',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '8px',
+          lineHeight: 1.45
+        }}>
+          <Info size={15} color="var(--blue)" style={{ flexShrink: 0, marginTop: '2px' }} />
+          <span>
+            <strong>Data Provenance Notice:</strong> District boundaries reflect the pre-January 2026 administrative structure; Delhi's 13-district reorganization (dissolution of Shahdara into North East Delhi, and creation of Old Delhi, Central North Delhi, and Outer North Delhi) is grouped under parent districts pending updated public GIS boundary data.
+          </span>
+        </div>
+      )}
     </div>
   );
 }
