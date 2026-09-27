@@ -1,4 +1,5 @@
 import React from 'react';
+import teamMeridianLogo from '../assets/team-meridian-logo.png';
 
 export default function Footer({ setCurrentTab, onOpenReport, onSwitchFeed }) {
   const year = new Date().getFullYear();
@@ -24,8 +25,7 @@ export default function Footer({ setCurrentTab, onOpenReport, onSwitchFeed }) {
       background: 'var(--ice)',
       borderTop: '1px solid var(--line)',
       padding: '28px 6% 35px',
-      marginTop: 'auto',
-      marginBottom: '7px'
+      marginTop: 'auto'
     }}>
       <div style={{
         maxWidth: '1200px',
@@ -93,13 +93,34 @@ export default function Footer({ setCurrentTab, onOpenReport, onSwitchFeed }) {
           </button>
         </div>
 
-        {/* ── Right: Credits ── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', alignItems: 'flex-end', textAlign: 'right', minWidth: '200px' }}>
-          <div style={{ fontSize: '14px', color: 'var(--navy-soft)' }}>
+        {/* ── Right: Credits & Team Meridian ── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end', textAlign: 'right', minWidth: '200px' }}>
+          <div style={{ fontSize: '13.5px', color: 'var(--navy-soft)' }}>
             © {year} CivicLens
           </div>
-          <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--navy-soft)' }}>
-            Built by Srinivas, Uday and Surendra.
+          <div style={{ fontSize: '13.5px', fontWeight: 500, color: 'var(--navy-soft)' }}>
+            Built by Surendra, Srinivas and Uday.
+          </div>
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            marginTop: '4px'
+          }}>
+            <span style={{ fontSize: '13px', color: 'var(--navy-soft)', fontWeight: 500 }}>
+              Made by Team Meridian
+            </span>
+            <img
+              src={teamMeridianLogo}
+              alt="Team Meridian"
+              style={{
+                width: '26px',
+                height: '26px',
+                borderRadius: '50%',
+                objectFit: 'contain',
+                display: 'block'
+              }}
+            />
           </div>
         </div>
 

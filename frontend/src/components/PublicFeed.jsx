@@ -116,10 +116,17 @@ function IssueCard({ issue, isHighlighted, isSupported, onSupport }) {
 
         {/* Row 3: short summary */}
         <p style={{
-          fontSize: '13.5px', fontWeight: 400, color: 'var(--navy)',
-          lineHeight: 1.5, margin: '0 0 14px',
-          display: '-webkit-box', WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical', overflow: 'hidden'
+          fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+          fontSize: '13.5px',
+          fontWeight: 400,
+          color: 'var(--navy-soft)',
+          lineHeight: 1.55,
+          letterSpacing: '-0.005em',
+          margin: '0 0 14px',
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden'
         }}>
           {issue.summary || issue.raw_text}
         </p>
