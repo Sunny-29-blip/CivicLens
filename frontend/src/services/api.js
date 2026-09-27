@@ -218,13 +218,21 @@ export const api = {
     return res.json();
   },
 
-  async updateComplaintStatus(complaintId, status) {
-    const res = await fetch(`${API_BASE_URL}/officials/complaints/${complaintId}/status`, {
+  async updateComplaintStatus(complaintId, status, token = null) {
+    const params = new URLSearchParams();
+    if (token) params.append("token", token);
+    const res = await fetch(`${API_BASE_URL}/officials/complaints/${complaintId}/status?${params.toString()}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { "Authorization": `Bearer ${token}` } : {})
+      },
       body: JSON.stringify({ status })
     });
-    if (!res.ok) throw new Error("Failed to update status");
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Failed to update status");
+    }
     return res.json();
   },
 

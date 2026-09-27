@@ -71,8 +71,8 @@ export default function OfficialsDashboard({ session, onLogout }) {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [selectedHotspot, setSelectedHotspot] = useState(null);
   const [updatingId, setUpdatingId] = useState(null);
-  // Part L: 3-tab internal nav
   const [dashTab, setDashTab] = useState('overview'); // 'overview' | 'hotspots' | 'grievances'
+  const [statusFilter, setStatusFilter] = useState('open'); // 'open' | 'all' | 'resolved'
 
   const official = session?.profile || {
     name: 'Dr. Rajeshwar Rao, IAS',
@@ -125,7 +125,72 @@ export default function OfficialsDashboard({ session, onLogout }) {
   const handleUpdateStatus = async (complaintId, newStatus) => {
     setUpdatingId(complaintId);
     try {
-      await api.updateComplaintStatus(complaintId, newStatus);
+      await api.updateComplaintStatus(complaintId, newStatus, token);
+
+      // 1. Optimistic update of main dashboardData (KPIs & complaints list)
+      setDashboardData(prev => {
+        if (!prev) return prev;
+        const prevComplaints = prev.complaints || [];
+        const target = prevComplaints.find(c => c.id === complaintId);
+        const wasOpen = target && target.status !== 'resolved';
+
+        const updatedComplaints = prevComplaints.map(c => 
+          c.id === complaintId ? { ...c, status: newStatus } : c
+        );
+
+        const currentOpen = prev.kpis?.open_issues ?? ((prev.kpis?.pending_count || 0) + (prev.kpis?.in_progress_count || 0));
+
+        const newKpis = {
+          ...prev.kpis,
+          open_issues: wasOpen && newStatus === 'resolved' 
+            ? Math.max(0, currentOpen - 1) 
+            : prev.kpis?.open_issues,
+          pending_count: wasOpen && newStatus === 'resolved' && target?.status === 'pending'
+            ? Math.max(0, (prev.kpis?.pending_count || 1) - 1)
+            : prev.kpis?.pending_count,
+          in_progress_count: wasOpen && newStatus === 'resolved' && target?.status === 'in_progress'
+            ? Math.max(0, (prev.kpis?.in_progress_count || 1) - 1)
+            : prev.kpis?.in_progress_count,
+          resolved_count: wasOpen && newStatus === 'resolved' 
+            ? (prev.kpis?.resolved_count || 0) + 1 
+            : prev.kpis?.resolved_count
+        };
+
+        return {
+          ...prev,
+          kpis: newKpis,
+          complaints: updatedComplaints
+        };
+      });
+
+      // 2. Optimistic update of selectedHotspot drilldown
+      setSelectedHotspot(prev => {
+        if (!prev) return prev;
+        const updatedList = (prev.complaints || []).map(c => 
+          c.id === complaintId ? { ...c, status: newStatus } : c
+        );
+        return {
+          ...prev,
+          complaints: updatedList,
+          complaint_count: updatedList.filter(c => c.status !== 'resolved').length
+        };
+      });
+
+      // 3. Optimistic update of hotspots matrix list
+      setHotspots(prev => 
+        prev.map(h => {
+          const updatedList = (h.complaints || []).map(c => 
+            c.id === complaintId ? { ...c, status: newStatus } : c
+          );
+          return {
+            ...h,
+            complaints: updatedList,
+            complaint_count: updatedList.filter(c => c.status !== 'resolved').length
+          };
+        })
+      );
+
+      // Re-sync with server
       loadData();
     } catch (err) {
       console.error('Status update failed:', err);
@@ -581,224 +646,274 @@ export default function OfficialsDashboard({ session, onLogout }) {
           </div>
 
           {/* Selected Hotspot Inspection Drawer */}
-          {selectedHotspot && (
-            <div style={{
-              background: 'var(--ice)',
-              border: '1px solid var(--sky)',
-              borderRadius: 'var(--radius-md)',
-              padding: '20px',
-              marginBottom: '20px'
-            }}>
-              <h4 style={{ fontSize: '15px', margin: '0 0 12px', color: 'var(--navy)' }}>
-                Inspecting Hotspot: {selectedHotspot.district} ({selectedHotspot.state}) — {selectedHotspot.category.replace(/_/g, ' ').toUpperCase()}
-              </h4>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {selectedHotspot.complaints.map((c) => (
-                  <div key={c.id} style={{
+          {selectedHotspot && (() => {
+            const activeHotspotComplaints = (selectedHotspot.complaints || []).filter(c => c.status !== 'resolved');
+            return (
+              <div style={{
+                background: 'var(--ice)',
+                border: '1px solid var(--sky)',
+                borderRadius: 'var(--radius-md)',
+                padding: '20px',
+                marginBottom: '20px'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <h4 style={{ fontSize: '15px', margin: 0, color: 'var(--navy)' }}>
+                    Inspecting Hotspot: {selectedHotspot.district} ({selectedHotspot.state}) — {selectedHotspot.category?.replace(/_/g, ' ').toUpperCase()}
+                  </h4>
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--navy-soft)' }}>
+                    {activeHotspotComplaints.length} open issue{activeHotspotComplaints.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+
+                {activeHotspotComplaints.length === 0 ? (
+                  <div style={{
+                    textAlign: 'center',
+                    padding: '24px',
                     background: 'var(--white)',
-                    border: '1px solid var(--line)',
                     borderRadius: 'var(--radius-sm)',
-                    padding: '12px 16px',
+                    border: '1px solid var(--line)',
+                    color: '#047857',
+                    fontWeight: 600,
+                    fontSize: '14px',
                     display: 'flex',
-                    justifyContent: 'space-between',
                     alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: '10px'
+                    justifyContent: 'center',
+                    gap: '8px'
                   }}>
-                    <div style={{ maxWidth: '600px' }}>
-                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--navy)' }}>
-                        {c.summary || c.raw_text}
-                      </div>
-                      <div style={{ fontSize: '11.5px', color: 'var(--navy-soft)', marginTop: '3px' }}>
-                        ID: <code>{c.id}</code> · Locality: {c.locality || c.location} · Priority: <strong>{c.priority_score}/100</strong>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        padding: '2px 8px',
-                        borderRadius: 'var(--radius-full)',
-                        background: c.status === 'resolved' ? 'var(--emerald-bg)' : c.status === 'in_progress' ? 'var(--amber-bg)' : 'var(--ice)',
-                        color: c.status === 'resolved' ? '#047857' : c.status === 'in_progress' ? '#b45309' : 'var(--navy)'
-                      }}>
-                        {c.status.toUpperCase()}
-                      </span>
-
-                      {c.status !== 'resolved' && (
-                        <button
-                          type="button"
-                          disabled={updatingId === c.id}
-                          onClick={() => handleUpdateStatus(c.id, 'resolved')}
-                          className="btn-primary"
-                          style={{ padding: '5px 10px', fontSize: '11px', background: 'var(--emerald)' }}
-                        >
-                          <Check size={12} />
-                          <span>Mark Resolved</span>
-                        </button>
-                      )}
-                    </div>
+                    <CheckCircle2 size={18} color="var(--emerald)" />
+                    <span>All complaints in this hotspot have been marked as resolved!</span>
                   </div>
-                ))}
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {activeHotspotComplaints.map((c) => (
+                      <div key={c.id} style={{
+                        background: 'var(--white)',
+                        border: '1px solid var(--line)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '12px 16px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: '10px'
+                      }}>
+                        <div style={{ maxWidth: '600px' }}>
+                          <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--navy)' }}>
+                            {c.summary || c.raw_text}
+                          </div>
+                          <div style={{ fontSize: '11.5px', color: 'var(--navy-soft)', marginTop: '3px' }}>
+                            ID: <code>{c.id}</code> · Locality: {c.locality || c.location} · Priority: <strong>{c.priority_score}/100</strong>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            padding: '2px 8px',
+                            borderRadius: 'var(--radius-full)',
+                            background: c.status === 'resolved' ? 'var(--emerald-bg)' : c.status === 'in_progress' ? 'var(--amber-bg)' : 'var(--ice)',
+                            color: c.status === 'resolved' ? '#047857' : c.status === 'in_progress' ? '#b45309' : 'var(--navy)'
+                          }}>
+                            {(c.status || 'open').toUpperCase()}
+                          </span>
+
+                          <button
+                            type="button"
+                            disabled={updatingId === c.id}
+                            onClick={() => handleUpdateStatus(c.id, 'resolved')}
+                            className="btn-primary"
+                            style={{ padding: '5px 10px', fontSize: '11px', background: 'var(--emerald)' }}
+                          >
+                            <Check size={12} />
+                            <span>Mark Resolved</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
         </>
       )}
 
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {/* TAB: ALL GRIEVANCES (Part O)                                       */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
-      {dashTab === 'grievances' && (
-        <div style={{
-          background: 'var(--white)',
-          border: '1px solid var(--line)',
-          borderRadius: 'var(--radius-md)',
-          padding: '22px',
-          boxShadow: 'var(--shadow-sm)'
-        }}>
-          <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-            <div>
-              <h3 style={{ fontSize: '17px', margin: 0 }}>
-                All Scoped Citizen Issues ({complaints.length})
-              </h3>
-              <p style={{ fontSize: '12.5px', color: 'var(--navy-soft)', margin: '4px 0 0' }}>
-                Jurisdiction-filtered. Use the scope filters above if needed.
-              </p>
-            </div>
-            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-              {level === 'national' && (
+      {dashTab === 'grievances' && (() => {
+        const filteredComplaints = complaints.filter(c => {
+          if (statusFilter === 'open') return c.status !== 'resolved';
+          if (statusFilter === 'resolved') return c.status === 'resolved';
+          return true; // 'all'
+        });
+
+        return (
+          <div style={{
+            background: 'var(--white)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-md)',
+            padding: '22px',
+            boxShadow: 'var(--shadow-sm)'
+          }}>
+            <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <h3 style={{ fontSize: '17px', margin: 0 }}>
+                  All Scoped Citizen Issues ({filteredComplaints.length})
+                </h3>
+                <p style={{ fontSize: '12.5px', color: 'var(--navy-soft)', margin: '4px 0 0' }}>
+                  Jurisdiction-filtered. Showing {statusFilter === 'open' ? 'open issues only (default)' : statusFilter === 'resolved' ? 'resolved issues' : 'all issues'}.
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                 <select
-                  value={drillState}
-                  onChange={(e) => { setDrillState(e.target.value); setDrillDistrict(''); }}
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="select-input"
+                  style={{ fontSize: '12.5px', fontWeight: 600 }}
+                >
+                  <option value="open">Status: Open (Default)</option>
+                  <option value="all">Status: All Statuses</option>
+                  <option value="resolved">Status: Resolved Only</option>
+                </select>
+
+                {level === 'national' && (
+                  <select
+                    value={drillState}
+                    onChange={(e) => { setDrillState(e.target.value); setDrillDistrict(''); }}
+                    className="select-input"
+                    style={{ fontSize: '12.5px' }}
+                  >
+                    <option value="">All States</option>
+                    <option value="Karnataka">Karnataka</option>
+                    <option value="Uttar Pradesh">Uttar Pradesh</option>
+                    <option value="Bihar">Bihar</option>
+                    <option value="Delhi">Delhi</option>
+                    <option value="Maharashtra">Maharashtra</option>
+                  </select>
+                )}
+                <select
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
                   className="select-input"
                   style={{ fontSize: '12.5px' }}
                 >
-                  <option value="">All States</option>
-                  <option value="Karnataka">Karnataka</option>
-                  <option value="Uttar Pradesh">Uttar Pradesh</option>
-                  <option value="Bihar">Bihar</option>
-                  <option value="Delhi">Delhi</option>
-                  <option value="Maharashtra">Maharashtra</option>
+                  <option value="">All Categories</option>
+                  <option value="roads">Roads</option>
+                  <option value="traffic">Traffic</option>
+                  <option value="electricity">Electricity</option>
+                  <option value="water_shortage">Water Shortage</option>
+                  <option value="pollution">Pollution</option>
                 </select>
-              )}
-              <select
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                className="select-input"
-                style={{ fontSize: '12.5px' }}
-              >
-                <option value="">All Categories</option>
-                <option value="roads">Roads</option>
-                <option value="traffic">Traffic</option>
-                <option value="electricity">Electricity</option>
-                <option value="water_shortage">Water Shortage</option>
-                <option value="pollution">Pollution</option>
-              </select>
+              </div>
             </div>
-          </div>
 
-          {complaints.length > 0 ? (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
-                <thead>
-                  <tr style={{ borderBottom: '2px solid var(--line)', color: 'var(--navy-soft)', fontSize: '11.5px', textTransform: 'uppercase' }}>
-                    <th style={{ padding: '10px 12px' }}>Complaint ID</th>
-                    <th style={{ padding: '10px 12px' }}>Summary &amp; Text</th>
-                    <th style={{ padding: '10px 12px' }}>Categories</th>
-                    <th style={{ padding: '10px 12px' }}>Jurisdiction</th>
-                    <th style={{ padding: '10px 12px' }}>Priority</th>
-                    <th style={{ padding: '10px 12px' }}>Status</th>
-                    <th style={{ padding: '10px 12px' }}>Resolution Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {complaints.map((c) => {
-                    const rawCats = c.categories || [c.category || 'roads'];
-                    return (
-                      <tr key={c.id} className="hotspot-row" style={{ borderBottom: '1px solid var(--line)' }}>
-                        <td style={{ padding: '12px' }}>
-                          <code style={{ fontSize: '11.5px', color: 'var(--blue)' }}>{c.id}</code>
-                        </td>
-                        <td style={{ padding: '12px', maxWidth: '300px' }}>
-                          <div style={{ fontWeight: 600, color: 'var(--navy)', lineHeight: 1.4 }}>
-                            {c.summary || c.raw_text}
-                          </div>
-                          <div style={{ fontSize: '11px', color: 'var(--navy-soft)', marginTop: '2px' }}>
-                            Lang: {c.original_language}
-                          </div>
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                            {rawCats.map((cat, idx) => (
-                              <span key={idx} style={{
-                                background: 'rgba(22, 86, 224, 0.08)',
-                                color: 'var(--blue)',
-                                border: '1px solid rgba(22, 86, 224, 0.25)',
-                                padding: '2px 7px',
-                                borderRadius: 'var(--radius-full)',
-                                fontSize: '11px',
-                                fontWeight: 600,
-                                textTransform: 'capitalize'
-                              }}>
-                                {cat.replace(/_/g, ' ')}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <div style={{ fontWeight: 500 }}>{c.district}, {c.state}</div>
-                          <div style={{ fontSize: '11px', color: 'var(--navy-soft)' }}>{c.locality || c.location}</div>
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <span className={`urgency-badge ${getPriorityBadgeClass(c.priority_score || 50)}`}>
-                            {c.priority_score || 50} / 100
-                          </span>
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <span style={{
-                            fontSize: '11px',
-                            fontWeight: 600,
-                            padding: '3px 8px',
-                            borderRadius: 'var(--radius-full)',
-                            background: c.status === 'resolved' ? 'var(--emerald-bg)' : c.status === 'in_progress' ? 'var(--amber-bg)' : 'var(--ice)',
-                            color: c.status === 'resolved' ? '#047857' : c.status === 'in_progress' ? '#b45309' : 'var(--navy)'
-                          }}>
-                            {c.status.toUpperCase()}
-                          </span>
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          {c.status !== 'resolved' ? (
-                            <button
-                              type="button"
-                              disabled={updatingId === c.id}
-                              onClick={() => handleUpdateStatus(c.id, 'resolved')}
-                              className="btn-primary"
-                              style={{ padding: '4px 10px', fontSize: '11px', background: 'var(--emerald)' }}
-                            >
-                              <Check size={12} />
-                              <span>Resolve</span>
-                            </button>
-                          ) : (
-                            <span style={{ fontSize: '11.5px', color: 'var(--emerald)', fontWeight: 600 }}>
-                              ✓ Closed
+            {filteredComplaints.length > 0 ? (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid var(--line)', color: 'var(--navy-soft)', fontSize: '11.5px', textTransform: 'uppercase' }}>
+                      <th style={{ padding: '10px 12px' }}>Complaint ID</th>
+                      <th style={{ padding: '10px 12px' }}>Summary &amp; Text</th>
+                      <th style={{ padding: '10px 12px' }}>Categories</th>
+                      <th style={{ padding: '10px 12px' }}>Jurisdiction</th>
+                      <th style={{ padding: '10px 12px' }}>Priority</th>
+                      <th style={{ padding: '10px 12px' }}>Status</th>
+                      <th style={{ padding: '10px 12px' }}>Resolution Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredComplaints.map((c) => {
+                      const rawCats = c.categories || [c.category || 'roads'];
+                      return (
+                        <tr key={c.id} className="hotspot-row" style={{ borderBottom: '1px solid var(--line)' }}>
+                          <td style={{ padding: '12px' }}>
+                            <code style={{ fontSize: '11.5px', color: 'var(--blue)' }}>{c.id}</code>
+                          </td>
+                          <td style={{ padding: '12px', maxWidth: '300px' }}>
+                            <div style={{ fontWeight: 600, color: 'var(--navy)', lineHeight: 1.4 }}>
+                              {c.summary || c.raw_text}
+                            </div>
+                            <div style={{ fontSize: '11px', color: 'var(--navy-soft)', marginTop: '2px' }}>
+                              Lang: {c.original_language}
+                            </div>
+                          </td>
+                          <td style={{ padding: '12px' }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                              {rawCats.map((cat, idx) => (
+                                <span key={idx} style={{
+                                  background: 'rgba(22, 86, 224, 0.08)',
+                                  color: 'var(--blue)',
+                                  border: '1px solid rgba(22, 86, 224, 0.25)',
+                                  padding: '2px 7px',
+                                  borderRadius: 'var(--radius-full)',
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  textTransform: 'capitalize'
+                                }}>
+                                  {cat.replace(/_/g, ' ')}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td style={{ padding: '12px' }}>
+                            <div style={{ fontWeight: 500 }}>{c.district}, {c.state}</div>
+                            <div style={{ fontSize: '11px', color: 'var(--navy-soft)' }}>{c.locality || c.location}</div>
+                          </td>
+                          <td style={{ padding: '12px' }}>
+                            <span className={`urgency-badge ${getPriorityBadgeClass(c.priority_score || 50)}`}>
+                              {c.priority_score || 50} / 100
                             </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div style={{ textAlign: 'center', padding: '30px', color: 'var(--navy-soft)', fontSize: '13px' }}>
-              No complaints found matching current jurisdiction filter.
-            </div>
-          )}
-        </div>
-      )}
+                          </td>
+                          <td style={{ padding: '12px' }}>
+                            <span style={{
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              padding: '3px 8px',
+                              borderRadius: 'var(--radius-full)',
+                              background: c.status === 'resolved' ? 'var(--emerald-bg)' : c.status === 'in_progress' ? 'var(--amber-bg)' : 'var(--ice)',
+                              color: c.status === 'resolved' ? '#047857' : c.status === 'in_progress' ? '#b45309' : 'var(--navy)'
+                            }}>
+                              {c.status.toUpperCase()}
+                            </span>
+                          </td>
+                          <td style={{ padding: '12px' }}>
+                            {c.status !== 'resolved' ? (
+                              <button
+                                type="button"
+                                disabled={updatingId === c.id}
+                                onClick={() => handleUpdateStatus(c.id, 'resolved')}
+                                className="btn-primary"
+                                style={{ padding: '4px 10px', fontSize: '11px', background: 'var(--emerald)' }}
+                              >
+                                <Check size={12} />
+                                <span>Resolve</span>
+                              </button>
+                            ) : (
+                              <span style={{ fontSize: '11.5px', color: 'var(--emerald)', fontWeight: 600 }}>
+                                ✓ Closed
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '30px', color: 'var(--navy-soft)', fontSize: '13px' }}>
+                {statusFilter === 'open' 
+                  ? 'No open complaints found matching current jurisdiction filter.' 
+                  : statusFilter === 'resolved'
+                  ? 'No resolved complaints found matching current jurisdiction filter.'
+                  : 'No complaints found matching current jurisdiction filter.'}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
