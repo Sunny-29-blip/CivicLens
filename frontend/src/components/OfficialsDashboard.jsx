@@ -127,7 +127,7 @@ export default function OfficialsDashboard({ session, onLogout }) {
     try {
       await api.updateComplaintStatus(complaintId, newStatus, token);
 
-      // 1. Optimistic update of main dashboardData (KPIs & complaints list)
+      // 1. Optimistic & atomic update of main dashboardData (KPIs, complaints list, and embedded hotspots)
       setDashboardData(prev => {
         if (!prev) return prev;
         const prevComplaints = prev.complaints || [];
@@ -156,14 +156,26 @@ export default function OfficialsDashboard({ session, onLogout }) {
             : prev.kpis?.resolved_count
         };
 
+        const updatedHotspots = (prev.hotspots || []).map(h => {
+          const updatedList = (h.complaints || []).map(c => 
+            c.id === complaintId ? { ...c, status: newStatus } : c
+          );
+          return {
+            ...h,
+            complaints: updatedList,
+            complaint_count: updatedList.length
+          };
+        });
+
         return {
           ...prev,
           kpis: newKpis,
-          complaints: updatedComplaints
+          complaints: updatedComplaints,
+          hotspots: updatedHotspots
         };
       });
 
-      // 2. Optimistic update of hotspots matrix list
+      // 2. Optimistic & atomic update of hotspots list
       setHotspots(prev => 
         prev.map(h => {
           const updatedList = (h.complaints || []).map(c => 
@@ -172,13 +184,10 @@ export default function OfficialsDashboard({ session, onLogout }) {
           return {
             ...h,
             complaints: updatedList,
-            complaint_count: updatedList.filter(c => c.status !== 'resolved').length
+            complaint_count: updatedList.length
           };
         })
       );
-
-      // Re-sync with server
-      loadData();
     } catch (err) {
       console.error('Status update failed:', err);
     } finally {
@@ -572,6 +581,8 @@ export default function OfficialsDashboard({ session, onLogout }) {
                       const rowKey = h.hotspot_id || `hotspot-${h.state}-${h.district}-${h.category}-${index}`;
                       const isExpanded = selectedHotspotId === rowKey;
                       const activeHotspotComplaints = (h.complaints || []).filter(c => c.status !== 'resolved');
+                      const openCount = activeHotspotComplaints.length;
+                      const totalCount = (h.complaints || []).length || h.complaint_count || 0;
 
                       return (
                         <React.Fragment key={rowKey}>
@@ -607,11 +618,11 @@ export default function OfficialsDashboard({ session, onLogout }) {
                               </span>
                             </td>
                             <td style={{ padding: '12px' }}>
-                              <span style={{ fontWeight: 800, fontSize: '15px', color: 'var(--navy)' }}>
-                                {h.complaint_count}
+                              <span style={{ fontWeight: 800, fontSize: '15px', color: openCount > 0 ? 'var(--navy)' : 'var(--emerald)' }}>
+                                {openCount}
                               </span>{' '}
                               <span style={{ fontSize: '13px', color: 'var(--navy-soft)', fontWeight: 500 }}>
-                                issue{h.complaint_count > 1 ? 's' : ''}
+                                open{totalCount > openCount ? ` · ${totalCount} total` : (openCount === 1 ? ' issue' : ' issues')}
                               </span>
                             </td>
                             <td style={{ padding: '12px' }}>
@@ -655,7 +666,7 @@ export default function OfficialsDashboard({ session, onLogout }) {
                                     </h4>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                       <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--navy-soft)' }}>
-                                        {activeHotspotComplaints.length} open issue{activeHotspotComplaints.length === 1 ? '' : 's'}
+                                        {openCount} open issue{openCount === 1 ? '' : 's'}{totalCount > openCount ? ` · ${totalCount} total` : ''}
                                       </span>
                                       <button
                                         type="button"
