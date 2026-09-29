@@ -336,7 +336,8 @@ export default function ComplaintStudio({ session, onRequireAuth, onViewInFeed, 
         analyzedData?.district || district,
         analyzedData?.locality || locality,
         selectedCategories,
-        manualCategories
+        manualCategories,
+        analyzedData
       );
       setSubmittedDoc(result);
     } catch (err) {

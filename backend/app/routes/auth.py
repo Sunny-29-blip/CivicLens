@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, EmailStr
 
 from app.config import settings
 from app.services.firestore_service import (
+    FS_READ_TIMEOUT_S,
+    FS_WRITE_TIMEOUT_S,
     firestore_service, 
     hash_password, 
     verify_password,
@@ -107,7 +109,7 @@ def _get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     
     if firestore_service.use_cloud_firestore and firestore_service.db:
         try:
-            docs = firestore_service.db.collection(USERS_COLLECTION).where("email", "==", email_clean).limit(1).stream()
+            docs = firestore_service.db.collection(USERS_COLLECTION).where("email", "==", email_clean).limit(1).stream(timeout=FS_READ_TIMEOUT_S)
             for d in docs:
                 return d.to_dict()
         except Exception as e:
@@ -127,7 +129,7 @@ def _save_user(user_doc: Dict[str, Any]):
     uid = user_doc["uid"]
     if firestore_service.use_cloud_firestore and firestore_service.db:
         try:
-            firestore_service.db.collection(USERS_COLLECTION).document(uid).set(user_doc)
+            firestore_service.db.collection(USERS_COLLECTION).document(uid).set(user_doc, timeout=FS_WRITE_TIMEOUT_S)
             return
         except Exception as e:
             logger.error(f"Firestore save user error: {e}")

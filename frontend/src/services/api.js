@@ -5,6 +5,23 @@ const API_BASE_URL = (import.meta.env.VITE_API_URL !== undefined && import.meta.
   : (import.meta.env.PROD ? "" : "http://localhost:8000");
 
 /**
+ * fetch() with a hard client-side deadline so the UI can never spin forever
+ * if the serverless function is cold, overloaded, or killed mid-request.
+ */
+async function fetchWithTimeout(url, options = {}, timeoutMs = 30000, timeoutMessage = "The server took too long to respond. Please try again.") {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error(timeoutMessage);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * CivicLens Unified API Client
  */
 export const api = {
@@ -104,7 +121,7 @@ export const api = {
 
   // Complaint Analysis (Step 3 - Review before persistence)
   async analyzeComplaint(text, state, district, locality, manualCategories = []) {
-    const res = await fetch(`${API_BASE_URL}/requests/analyze`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/requests/analyze`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -114,7 +131,7 @@ export const api = {
         locality,
         manual_categories: manualCategories
       })
-    });
+    }, 30000, "AI analysis is taking longer than expected. Please try again.");
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: "Analysis failed" }));
       throw new Error(err.detail || "Failed to analyze complaint with Gemini AI");
@@ -123,8 +140,9 @@ export const api = {
   },
 
   // Complaint Submission via Gemini + Citizen-Confirmed Categories (Step 5)
-  async submitComplaint(text, userId, state, district, locality, confirmedCategories = null, manualCategories = []) {
-    const res = await fetch(`${API_BASE_URL}/requests/submit`, {
+  // `analysis` is the reviewed /requests/analyze result; sending it lets the server skip a second Gemini call.
+  async submitComplaint(text, userId, state, district, locality, confirmedCategories = null, manualCategories = [], analysis = null) {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/requests/submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -134,9 +152,10 @@ export const api = {
         district,
         locality,
         confirmed_categories: confirmedCategories,
-        manual_categories: manualCategories
+        manual_categories: manualCategories,
+        analysis
       })
-    });
+    }, 30000, "Saving is taking longer than expected. Please check your connection and try again.");
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: "Submission failed" }));
       throw new Error(err.detail || "Failed to submit complaint");
@@ -196,9 +215,9 @@ export const api = {
     if (drillState) params.append("drill_state", drillState);
     if (drillDistrict) params.append("drill_district", drillDistrict);
 
-    const res = await fetch(`${API_BASE_URL}/officials/dashboard-data?${params.toString()}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/officials/dashboard-data?${params.toString()}`, {
       headers: token ? { "Authorization": `Bearer ${token}` } : {}
-    });
+    }, 25000, "Dashboard data is taking too long to load. Please retry.");
     if (!res.ok) throw new Error("Failed to fetch dashboard data");
     return res.json();
   },

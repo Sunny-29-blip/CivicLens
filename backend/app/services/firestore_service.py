@@ -19,6 +19,15 @@ USERS_COLLECTION = "users"
 OFFICIALS_COLLECTION = "officials"
 ANALYTICS_COLLECTION = "analytics"
 
+# Hard deadlines for Firestore RPCs. Without them the client retries transient errors for up
+# to a minute, which surfaces as a dashboard or submit button "hanging" instead of failing fast.
+FS_READ_TIMEOUT_S = 8.0
+FS_WRITE_TIMEOUT_S = 10.0
+
+# Official profiles are effectively static; caching them per warm instance saves one Firestore
+# round-trip on every dashboard / hotspot / map request.
+OFFICIAL_CACHE_TTL_S = 300.0
+
 
 def hash_password(password: str) -> str:
     """Hash a plaintext password using bcrypt."""
@@ -676,6 +685,7 @@ class FirestoreService:
         self.storage_reason = "No credentials provided; operating in local JSON fallback mode."
         self.data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
         self.db_file = os.path.join(self.data_dir, "civiclens_db.json")
+        self._official_cache: Dict[str, Any] = {}
         self._init_storage()
 
     def _init_storage(self):
@@ -871,7 +881,7 @@ class FirestoreService:
 
         if self.use_cloud_firestore and self.db:
             try:
-                self.db.collection(COMPLAINTS_COLLECTION).document(complaint_id).set(doc)
+                self.db.collection(COMPLAINTS_COLLECTION).document(complaint_id).set(doc, timeout=FS_WRITE_TIMEOUT_S)
                 return doc
             except Exception as e:
                 logger.error(f"Firestore cloud write error: {e}")
@@ -912,7 +922,7 @@ class FirestoreService:
                 if locality and locality != "unspecified":
                     query = query.where("locality", "==", locality)
 
-                docs = query.limit(limit).stream()
+                docs = query.limit(limit).stream(timeout=FS_READ_TIMEOUT_S)
                 results = [d.to_dict() for d in docs]
 
                 if search:
@@ -975,7 +985,7 @@ class FirestoreService:
         """Fetch a single complaint document."""
         if self.use_cloud_firestore and self.db:
             try:
-                doc = self.db.collection(COMPLAINTS_COLLECTION).document(complaint_id).get()
+                doc = self.db.collection(COMPLAINTS_COLLECTION).document(complaint_id).get(timeout=FS_READ_TIMEOUT_S)
                 if doc.exists:
                     return doc.to_dict()
             except Exception as e:
@@ -995,13 +1005,13 @@ class FirestoreService:
                 doc_ref = self.db.collection(COMPLAINTS_COLLECTION).document(complaint_id)
                 doc_ref.update({
                     "support_count": fa_firestore.firestore.Increment(amount)
-                })
-                snapshot = doc_ref.get()
+                }, timeout=FS_WRITE_TIMEOUT_S)
+                snapshot = doc_ref.get(timeout=FS_READ_TIMEOUT_S)
                 if not snapshot.exists:
                     return None
                 current = snapshot.to_dict()
                 if current.get("support_count", 0) >= 100000 and not current.get("high_priority", False):
-                    doc_ref.update({"high_priority": True})
+                    doc_ref.update({"high_priority": True}, timeout=FS_WRITE_TIMEOUT_S)
                     current["high_priority"] = True
                 return current
             except Exception as e:
@@ -1041,8 +1051,8 @@ class FirestoreService:
         if self.use_cloud_firestore and self.db:
             try:
                 doc_ref = self.db.collection(COMPLAINTS_COLLECTION).document(complaint_id)
-                doc_ref.update(update_fields)
-                snapshot = doc_ref.get()
+                doc_ref.update(update_fields, timeout=FS_WRITE_TIMEOUT_S)
+                snapshot = doc_ref.get(timeout=FS_READ_TIMEOUT_S)
                 if snapshot.exists:
                     return snapshot.to_dict()
             except Exception as e:
@@ -1067,7 +1077,7 @@ class FirestoreService:
         if self.use_cloud_firestore and self.db:
             try:
                 query = self.db.collection(COMPLAINTS_COLLECTION).where("user_id", "==", user_id)
-                docs = query.stream()
+                docs = query.stream(timeout=FS_READ_TIMEOUT_S)
                 results = sorted([d.to_dict() for d in docs], key=lambda x: x.get("timestamp", 0), reverse=True)
                 return results
             except Exception as e:
@@ -1082,11 +1092,17 @@ class FirestoreService:
 
     def get_official(self, official_id: str) -> Optional[Dict[str, Any]]:
         """Lookup official profile from Cloud Firestore, local storage, or fallback seed list."""
+        cached = self._official_cache.get(official_id)
+        if cached and time.time() - cached[0] < OFFICIAL_CACHE_TTL_S:
+            return dict(cached[1])
+
         if self.use_cloud_firestore and self.db:
             try:
-                doc = self.db.collection(OFFICIALS_COLLECTION).document(official_id).get()
+                doc = self.db.collection(OFFICIALS_COLLECTION).document(official_id).get(timeout=FS_READ_TIMEOUT_S)
                 if doc.exists:
-                    return doc.to_dict()
+                    official = doc.to_dict()
+                    self._official_cache[official_id] = (time.time(), official)
+                    return dict(official)
             except Exception as e:
                 logger.error(f"Firestore official lookup error: {e}")
 

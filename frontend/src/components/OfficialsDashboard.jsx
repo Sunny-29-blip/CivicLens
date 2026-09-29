@@ -9,7 +9,12 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell
 } from 'recharts';
 import { api } from '../services/api';
+import { loadGeo } from '../services/geo';
 import IndiaMap from './IndiaMap';
+
+// Last dashboard payload per (session, drill scope). Lives for the page session so returning
+// to the portal or re-drilling into a scope renders immediately while fresh data loads.
+const dashboardCache = new Map();
 
 const COLORS = ['#1656e0', '#3fc7ff', '#0a2e86', '#60a5fa', '#38bdf8', '#818cf8', '#10b981'];
 
@@ -86,41 +91,61 @@ export default function OfficialsDashboard({ session, onLogout }) {
   const token = session?.profile?.token || null;
   const level = official.level || 'national';
 
-  const loadData = async () => {
+  const cacheKey = `${token}|${drillState}|${drillDistrict}`;
+
+  // Start downloading the map boundaries immediately, in parallel with the dashboard API call,
+  // instead of waiting for the data to arrive before the map chunk is even requested.
+  useEffect(() => {
+    if (level === 'national') loadGeo('states').catch(() => {});
+    else if (level === 'state') loadGeo('districts').catch(() => {});
+  }, [level]);
+
+  // Dashboard payload: render the last response for this scope instantly (stale-while-revalidate),
+  // then refresh in the background.
+  useEffect(() => {
     if (!token) {
       setLoading(false);
       return;
     }
+    let cancelled = false;
+    const cached = dashboardCache.get(cacheKey);
+    if (cached) setDashboardData(cached);
     setLoading(true);
-    try {
-      if (categoryFilter) {
-        const [dashRes, hotRes] = await Promise.all([
-          api.getDashboardData(token, drillState || null, drillDistrict || null),
-          api.getHotspots(token, {
-            state: drillState || undefined,
-            district: drillDistrict || undefined,
-            category: categoryFilter || undefined
-          })
-        ]);
-        setDashboardData(dashRes);
-        setHotspots(hotRes || []);
-      } else {
-        const dashRes = await api.getDashboardData(token, drillState || null, drillDistrict || null);
-        setDashboardData(dashRes);
-        setHotspots(dashRes.hotspots || []);
-      }
-    } catch (err) {
-      console.error('Failed to load officials dashboard data:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+    api.getDashboardData(token, drillState || null, drillDistrict || null)
+      .then(dashRes => {
+        dashboardCache.set(cacheKey, dashRes);
+        if (!cancelled) setDashboardData(dashRes);
+      })
+      .catch(err => console.error('Failed to load officials dashboard data:', err))
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [cacheKey]);
+
+  // Hotspots: the unfiltered list ships inside the dashboard payload; only a category filter
+  // needs its own (small) request — it no longer refetches the whole dashboard.
+  const baseHotspots = dashboardData?.hotspots;
+  useEffect(() => {
+    if (!categoryFilter) setHotspots(baseHotspots || []);
+  }, [categoryFilter, baseHotspots]);
 
   useEffect(() => {
-    if (token) {
-      loadData();
-    }
+    if (!token || !categoryFilter) return;
+    let cancelled = false;
+    api.getHotspots(token, {
+      state: drillState || undefined,
+      district: drillDistrict || undefined,
+      category: categoryFilter
+    })
+      .then(hotRes => { if (!cancelled) setHotspots(hotRes || []); })
+      .catch(err => console.error('Failed to load filtered hotspots:', err));
+    return () => { cancelled = true; };
   }, [token, drillState, drillDistrict, categoryFilter]);
+
+  // Keep the cached payload in step with optimistic status updates, so revisiting the
+  // dashboard never flashes pre-update counts.
+  useEffect(() => {
+    if (dashboardData && dashboardCache.has(cacheKey)) dashboardCache.set(cacheKey, dashboardData);
+  }, [dashboardData]);
 
   const handleUpdateStatus = async (complaintId, newStatus) => {
     setUpdatingId(complaintId);
@@ -534,7 +559,7 @@ export default function OfficialsDashboard({ session, onLogout }) {
           {/* India Choropleth Map — wrapped in error boundary (Part A + P) */}
           <div style={{ marginBottom: '28px' }}>
             <MapErrorBoundary>
-              <IndiaMap token={token} mapData={dashboardData?.map_data} />
+              <IndiaMap token={token} mapData={dashboardData?.map_data} managed={loading || !!dashboardData} />
             </MapErrorBoundary>
           </div>
         </>
