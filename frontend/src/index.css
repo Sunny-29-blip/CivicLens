@@ -90,3 +90,10 @@ a {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Prevent clipping of rotated chart labels */
+.recharts-surface,
+.recharts-wrapper {
+  overflow: visible !important;
+}
+

@@ -18,6 +18,39 @@ const dashboardCache = new Map();
 
 const COLORS = ['#1656e0', '#3fc7ff', '#0a2e86', '#60a5fa', '#38bdf8', '#818cf8', '#10b981'];
 
+// Truncate long jurisdiction / locality names on axis ticks with an ellipsis if > 13 chars
+const formatPriorityAxisLabel = (value) => {
+  if (!value) return '';
+  const str = String(value);
+  if (str.length > 13) {
+    return `${str.slice(0, 12)}…`;
+  }
+  return str;
+};
+
+// Custom axis tick to render rotated label with native SVG <title> hover tooltip
+const PriorityAxisTick = ({ x = 0, y = 0, payload = {} }) => {
+  const fullName = String(payload?.value || '');
+  const displayName = formatPriorityAxisLabel(fullName);
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text
+        x={0}
+        y={0}
+        dy={12}
+        dx={-4}
+        textAnchor="end"
+        fill="#4b6182"
+        fontSize={12}
+        transform="rotate(-25)"
+      >
+        <title>{fullName}</title>
+        {displayName}
+      </text>
+    </g>
+  );
+};
+
 /* ─── Map Error Boundary (Part A + P) ──────────────────────────────────────── */
 class MapErrorBoundary extends Component {
   constructor(props) {
@@ -477,14 +510,20 @@ export default function OfficialsDashboard({ session, onLogout }) {
                 </h3>
               </div>
 
-              <div style={{ height: '260px', width: '100%' }}>
+              <div style={{ height: '260px', width: '100%', overflow: 'visible' }}>
                 {chartData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 20 }}>
+                    <BarChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 55 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                      <XAxis dataKey="name" tick={{ fontSize: 13, fill: '#4b6182' }} angle={-25} textAnchor="end" interval={0} />
-                      <YAxis domain={[0, 100]} tick={{ fontSize: 13, fill: '#4b6182' }} />
+                      <XAxis
+                        dataKey="name"
+                        height={60}
+                        interval={0}
+                        tick={<PriorityAxisTick />}
+                      />
+                      <YAxis domain={[0, 100]} width={36} tick={{ fontSize: 12, fill: '#4b6182' }} />
                       <Tooltip 
+                        labelFormatter={(label, payload) => payload?.[0]?.payload?.name || label}
                         formatter={(val) => [`${val}/100`, 'Priority Score']}
                         contentStyle={{ borderRadius: '8px', border: '1px solid #d7e4f4', fontSize: '14px' }}
                       />
