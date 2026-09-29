@@ -3,7 +3,7 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Query, Body, Header
 from pydantic import BaseModel, Field
 
-from app.services.firestore_service import firestore_service, COMPLAINTS_COLLECTION
+from app.services.firestore_service import firestore_service, COMPLAINTS_COLLECTION, FS_READ_TIMEOUT_S, FS_WRITE_TIMEOUT_S
 
 router = APIRouter(prefix="/public", tags=["Public Feed & Citizen Backing"])
 logger = logging.getLogger("civiclens.routes.public")
@@ -81,12 +81,12 @@ async def support_issue(
                 .collection("supporters")
                 .document(uid)
             )
-            snap = supporter_ref.get()
+            snap = supporter_ref.get(timeout=FS_READ_TIMEOUT_S)
             if snap.exists:
                 already_voted = True
             else:
                 import time
-                supporter_ref.set({"uid": uid, "voted_at": time.time()})
+                supporter_ref.set({"uid": uid, "voted_at": time.time()}, timeout=FS_WRITE_TIMEOUT_S)
         except Exception as e:
             logger.error(f"Supporters sub-collection error: {e}")
     else:

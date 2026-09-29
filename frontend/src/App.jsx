@@ -1,12 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import Navbar from './components/Navbar';
 import UnifiedAuthModal from './components/UnifiedAuthModal';
 import ComplaintStudio from './components/ComplaintStudio';
-import PublicFeed from './components/PublicFeed';
-import OfficialsDashboard from './components/OfficialsDashboard';
-import MyIssuesPage from './components/MyIssuesPage';
 import Footer from './components/Footer';
 import './App.css';
+
+// Secondary views are code-split so the first page only downloads what it renders.
+// The officials dashboard pulls in Recharts + the India map, which used to be bundled
+// into the single 2.8 MB script every visitor had to download and parse up front.
+const loadPublicFeed = () => import('./components/PublicFeed');
+const loadOfficialsDashboard = () => import('./components/OfficialsDashboard');
+const loadMyIssuesPage = () => import('./components/MyIssuesPage');
+const PublicFeed = lazy(loadPublicFeed);
+const OfficialsDashboard = lazy(loadOfficialsDashboard);
+const MyIssuesPage = lazy(loadMyIssuesPage);
+
+const ViewFallback = () => (
+  <div style={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--navy-soft)', fontSize: '14px' }}>
+    Loading…
+  </div>
+);
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState('studio'); // 'studio' | 'feed'
@@ -29,6 +42,21 @@ export default function App() {
     } catch (e) {
       console.warn('Could not read session from localStorage', e);
     }
+  }, []);
+
+  // Warm the other views' chunks once the first page is idle, so switching views is instant.
+  useEffect(() => {
+    const prefetch = () => {
+      loadOfficialsDashboard();
+      loadPublicFeed();
+      loadMyIssuesPage();
+    };
+    if ('requestIdleCallback' in window) {
+      const id = window.requestIdleCallback(prefetch, { timeout: 3000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const t = setTimeout(prefetch, 1500);
+    return () => clearTimeout(t);
   }, []);
 
   const handleOpenAuth = (mode = 'select') => {
@@ -88,6 +116,7 @@ export default function App() {
 
       {/* Main View Area */}
       <main style={{ flex: 1 }}>
+        <Suspense fallback={<ViewFallback />}>
         {/* If official is logged in: show ONLY officials dashboard */}
         {isOfficial ? (
           <OfficialsDashboard
@@ -123,6 +152,7 @@ export default function App() {
             )}
           </>
         )}
+        </Suspense>
       </main>
 
       {/* Unified CivicLens Authentication Portal (Citizen & Official) */}

@@ -1,6 +1,6 @@
 import time
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,11 @@ class SubmitComplaintRequest(BaseModel):
     locality: Optional[str] = Field(None, description="Optional citizen selected locality hint")
     confirmed_categories: Optional[List[str]] = Field(None, description="Citizen-reviewed categories after editing")
     manual_categories: Optional[List[str]] = Field(default_factory=list, description="Categories manually added by citizen")
+    analysis: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Result previously returned by /requests/analyze for this exact text. "
+                    "When present, it is re-validated deterministically instead of calling Gemini again."
+    )
 
 
 class ComplaintResponse(BaseModel):
@@ -126,12 +131,30 @@ async def submit_complaint(payload: SubmitComplaintRequest):
 
     logger.info(f"Received complaint from user {payload.user_id}: '{payload.text[:60]}...'")
 
-    # 1. Run Gemini classification with state & district hints
-    classification = await classify_complaint_with_gemini(
-        text=payload.text,
-        state_hint=payload.state,
-        district_hint=payload.district
-    )
+    # 1. Reuse the citizen-reviewed /analyze result when available (avoids a second, slow
+    #    Gemini round-trip). It is re-run through the deterministic validator so taxonomy,
+    #    urgency promotion and location normalization are still enforced server-side.
+    classification = None
+    if payload.analysis:
+        try:
+            prior = dict(payload.analysis)
+            prior["categories"] = prior.get("ai_categories") or prior.get("categories") or []
+            classification = _two_stage_merge_and_validate(
+                prior,
+                payload.text,
+                state_hint=payload.state,
+                district_hint=payload.district
+            )
+        except Exception as e:
+            logger.warning(f"Provided analysis failed validation ({type(e).__name__}); re-classifying.")
+            classification = None
+
+    if classification is None:
+        classification = await classify_complaint_with_gemini(
+            text=payload.text,
+            state_hint=payload.state,
+            district_hint=payload.district
+        )
 
     ai_cats = list(classification.get("categories", ["roads"]))
     manual_cats = payload.manual_categories or []

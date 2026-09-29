@@ -10,6 +10,7 @@
  */
 import React, { useState, useCallback } from 'react';
 import { api } from '../services/api';
+import { loadGeo } from '../services/geo';
 import {
   ComposableMap,
   Geographies,
@@ -17,8 +18,6 @@ import {
 } from 'react-simple-maps';
 import { geoMercator } from 'd3-geo';
 import { Map as MapIcon, AlertCircle, Info } from 'lucide-react';
-import statesGeoData from '../data/india_states.json';
-import districtsGeoData from '../data/india_districts.json';
 
 /* ─── Name normalization & alias map ──────────────────────────────────────── */
 const normalize = (s) => (s || '')
@@ -352,16 +351,16 @@ function ChoroplethMap({ geoData, isNational, scopeState, dataMap, maxCount }) {
 
     const targetCollection = !isNational && visibleFeatures.length > 0
       ? { type: 'FeatureCollection', features: visibleFeatures }
-      : (safeGeoData?.features?.length > 0 ? safeGeoData : statesGeoData);
+      : (safeGeoData?.features?.length > 0 ? safeGeoData : geoData);
 
     try {
       proj.fitExtent(extent, targetCollection);
     } catch (e) {
       console.warn('[IndiaMap] fitExtent projection fallback:', e);
-      proj.fitExtent(extent, statesGeoData);
+      proj.fitExtent(extent, geoData);
     }
     return proj;
-  }, [dimensions, isNational, visibleFeatures, safeGeoData]);
+  }, [dimensions, isNational, visibleFeatures, safeGeoData, geoData]);
 
   return (
     <div
@@ -455,23 +454,36 @@ function ChoroplethMap({ geoData, isNational, scopeState, dataMap, maxCount }) {
 }
 
 /* ─── Main IndiaMap component ─────────────────────────────────────────────── */
-export default function IndiaMap({ token, mapData: externalMapData }) {
+// `managed` = the parent supplies mapData (e.g. from /officials/dashboard-data), so the map must
+// not fire its own duplicate /officials/map-data request while the parent is still loading.
+export default function IndiaMap({ token, mapData: externalMapData, managed = false }) {
   const [internalMapData, setInternalMapData] = React.useState(null);
   const [error, setError] = React.useState(null);
-  const [loaded, setLoaded] = React.useState(false);
+  const [fetched, setFetched] = React.useState(false);
+  const [geoByKind, setGeoByKind] = React.useState({});
 
   const mapData = externalMapData || internalMapData;
+  const loaded = managed ? !!externalMapData : (!!externalMapData || fetched);
 
   React.useEffect(() => {
-    if (externalMapData) {
-      setLoaded(true);
-      return;
-    }
-    if (!token) { setLoaded(true); return; }
+    if (managed || externalMapData) return;
+    if (!token) { setFetched(true); return; }
     api.getMapData(token)
-      .then(data => { setInternalMapData(data); setLoaded(true); })
-      .catch(err => { setError(err.message); setLoaded(true); });
-  }, [token, externalMapData]);
+      .then(data => { setInternalMapData(data); setFetched(true); })
+      .catch(err => { setError(err.message); setFetched(true); });
+  }, [token, externalMapData, managed]);
+
+  const geoKind = mapData?.level === 'national' ? 'states' : mapData?.level === 'state' ? 'districts' : null;
+  const geoData = geoKind ? geoByKind[geoKind] : null;
+
+  React.useEffect(() => {
+    if (!geoKind || geoByKind[geoKind]) return;
+    let cancelled = false;
+    loadGeo(geoKind)
+      .then(data => { if (!cancelled) setGeoByKind(prev => ({ ...prev, [geoKind]: data })); })
+      .catch(err => { if (!cancelled) setError(`Could not load map boundaries: ${err.message}`); });
+    return () => { cancelled = true; };
+  }, [geoKind, geoByKind]);
 
   // Build lookup map
   const dataMap = React.useMemo(() => {
@@ -521,8 +533,9 @@ export default function IndiaMap({ token, mapData: externalMapData }) {
     </div>
   );
 
-  // Loading
-  if (!loaded) {
+  // Loading (map data, or boundary GeoJSON for the choropleth tiers)
+  const needsGeo = !error && (level === 'national' || level === 'state') && !geoData;
+  if (!loaded || needsGeo) {
     return (
       <div style={cardStyle}>
         {header}
@@ -576,7 +589,6 @@ export default function IndiaMap({ token, mapData: externalMapData }) {
   // National / State tier → choropleth
   const isNational = level === 'national';
   const scopeState = normalize(scope?.state || '');
-  const geoData = isNational ? statesGeoData : districtsGeoData;
 
   return (
     <div style={cardStyle}>
