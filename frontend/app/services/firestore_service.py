@@ -3,6 +3,7 @@ import os
 import uuid
 import time
 import logging
+import concurrent.futures
 from typing import Dict, Any, List, Optional
 import bcrypt
 
@@ -18,6 +19,15 @@ COMPLAINTS_COLLECTION = "complaints"
 USERS_COLLECTION = "users"
 OFFICIALS_COLLECTION = "officials"
 ANALYTICS_COLLECTION = "analytics"
+
+# Hard deadlines for Firestore RPCs. Without them the client retries transient errors for up
+# to a minute, which surfaces as a dashboard or submit button "hanging" instead of failing fast.
+FS_READ_TIMEOUT_S = 8.0
+FS_WRITE_TIMEOUT_S = 10.0
+
+# Official profiles are effectively static; caching them per warm instance saves one Firestore
+# round-trip on every dashboard / hotspot / map request.
+OFFICIAL_CACHE_TTL_S = 300.0
 
 
 def hash_password(password: str) -> str:
@@ -664,6 +674,45 @@ INITIAL_OFFICIALS: List[Dict[str, Any]] = [
 ]
 
 
+# Module-level singletons to prevent re-initialization across serverless invocations
+_cached_firestore_app = None
+_cached_firestore_client = None
+
+
+def _configure_rest_transport(client):
+    """
+    Configures Firestore client to use standard HTTP/REST transport instead of gRPC.
+    Eliminates half-open connection hangs and connection-reuse latency in serverless runtimes.
+    """
+    try:
+        from google.cloud.firestore_v1.services.firestore.transports.rest import FirestoreRestTransport
+        from google.cloud.firestore_v1.services.firestore.client import FirestoreClient
+
+        class RestFirestoreClient(type(client)):
+            @property
+            def _firestore_api(self):
+                if self._firestore_api_internal is None:
+                    endpoint = "firestore.googleapis.com"
+                    if self._client_options and hasattr(self._client_options, "api_endpoint") and self._client_options.api_endpoint:
+                        endpoint = self._client_options.api_endpoint
+                    self._transport = FirestoreRestTransport(
+                        credentials=self._credentials,
+                        host=endpoint
+                    )
+                    self._firestore_api_internal = FirestoreClient(
+                        transport=self._transport,
+                        client_options=self._client_options
+                    )
+                return self._firestore_api_internal
+
+        client.__class__ = RestFirestoreClient
+        client._firestore_api_internal = None
+        logger.info("✅ Firestore configured with HTTP/REST transport (prevents gRPC connection hangs)")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not force REST transport on Firestore client (retaining default): {e}")
+    return client
+
+
 class FirestoreService:
     """
     Unified Data Access Layer for Google Cloud Firestore.
@@ -676,10 +725,21 @@ class FirestoreService:
         self.storage_reason = "No credentials provided; operating in local JSON fallback mode."
         self.data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
         self.db_file = os.path.join(self.data_dir, "civiclens_db.json")
+        self._official_cache: Dict[str, Any] = {}
         self._init_storage()
 
     def _init_storage(self):
-        """Try initializing Google Cloud Firestore / Firebase Admin SDK, or fallback to local persistence."""
+        """Try initializing Google Cloud Firestore / Firebase Admin SDK with REST transport, or fallback to local persistence."""
+        global _cached_firestore_app, _cached_firestore_client
+
+        # Re-use cached client across warm serverless invocations
+        if _cached_firestore_client is not None:
+            self.db = _cached_firestore_client
+            self.use_cloud_firestore = True
+            self.storage_reason = "Reusing cached Firestore client instance across warm invocations"
+            logger.info("⚡ Reusing cached Firestore client instance across warm invocations")
+            return
+
         project_id = settings.FIREBASE_PROJECT_ID or "jansetu-d2106"
         service_account_json = settings.FIREBASE_SERVICE_ACCOUNT_JSON or os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "")
         creds_path = settings.FIREBASE_CREDENTIALS_PATH
@@ -697,13 +757,15 @@ class FirestoreService:
                 parsed_cert = json.loads(service_account_json)
                 cred = credentials.Certificate(parsed_cert)
                 try:
-                    firebase_admin.initialize_app(cred, {"projectId": project_id})
+                    _cached_firestore_app = firebase_admin.initialize_app(cred, {"projectId": project_id})
                 except ValueError:
-                    pass
-                self.db = firestore.client()
+                    _cached_firestore_app = firebase_admin.get_app()
+                raw_client = firestore.client()
+                self.db = _configure_rest_transport(raw_client)
+                _cached_firestore_client = self.db
                 self.use_cloud_firestore = True
-                self.storage_reason = f"Connected to Google Cloud Firestore via Secret Manager JSON (Project: {project_id})"
-                logger.info(f"✅ Real Google Cloud Firestore connected via Secret Manager JSON (Project ID: {project_id})")
+                self.storage_reason = f"Connected to Google Cloud Firestore via Secret Manager JSON [REST Transport] (Project: {project_id})"
+                logger.info(f"✅ Real Google Cloud Firestore connected via Secret Manager JSON [REST Transport] (Project ID: {project_id})")
                 return
 
             # 2. Second priority: Local service account file path
@@ -712,13 +774,15 @@ class FirestoreService:
                 from firebase_admin import credentials, firestore
                 cred = credentials.Certificate(creds_path)
                 try:
-                    firebase_admin.initialize_app(cred, {"projectId": project_id})
+                    _cached_firestore_app = firebase_admin.initialize_app(cred, {"projectId": project_id})
                 except ValueError:
-                    pass
-                self.db = firestore.client()
+                    _cached_firestore_app = firebase_admin.get_app()
+                raw_client = firestore.client()
+                self.db = _configure_rest_transport(raw_client)
+                _cached_firestore_client = self.db
                 self.use_cloud_firestore = True
-                self.storage_reason = f"Connected to Google Cloud Firestore (Project: {project_id})"
-                logger.info(f"✅ Real Google Cloud Firestore connected (Project ID: {project_id})")
+                self.storage_reason = f"Connected to Google Cloud Firestore [REST Transport] (Project: {project_id})"
+                logger.info(f"✅ Real Google Cloud Firestore connected [REST Transport] (Project ID: {project_id})")
                 return
 
             # 3. Third priority: Application Default Credentials (ADC)
@@ -726,13 +790,15 @@ class FirestoreService:
                 import firebase_admin
                 from firebase_admin import firestore
                 try:
-                    firebase_admin.initialize_app(options={"projectId": project_id})
+                    _cached_firestore_app = firebase_admin.initialize_app(options={"projectId": project_id})
                 except ValueError:
-                    pass
-                self.db = firestore.client()
+                    _cached_firestore_app = firebase_admin.get_app()
+                raw_client = firestore.client()
+                self.db = _configure_rest_transport(raw_client)
+                _cached_firestore_client = self.db
                 self.use_cloud_firestore = True
-                self.storage_reason = f"Connected via GOOGLE_APPLICATION_CREDENTIALS (Project: {project_id})"
-                logger.info(f"✅ Real Google Cloud Firestore connected via ADC (Project ID: {project_id})")
+                self.storage_reason = f"Connected via GOOGLE_APPLICATION_CREDENTIALS [REST Transport] (Project: {project_id})"
+                logger.info(f"✅ Real Google Cloud Firestore connected via ADC [REST Transport] (Project ID: {project_id})")
                 return
             else:
                 self.storage_reason = f"FIREBASE_CREDENTIALS_PATH not set or file not found. Running in local JSON database mode (Project: {project_id})."
@@ -870,11 +936,25 @@ class FirestoreService:
         }
 
         if self.use_cloud_firestore and self.db:
+            t_start = time.perf_counter()
+            iso_start = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            logger.info(f"⏳ [Firestore Write Start] [{complaint_id}] Initiating write to collection '{COMPLAINTS_COLLECTION}' at {iso_start}...")
             try:
-                self.db.collection(COMPLAINTS_COLLECTION).document(complaint_id).set(doc)
+                doc_ref = self.db.collection(COMPLAINTS_COLLECTION).document(complaint_id)
+                # Explicit bounded timeout of 5.0s strictly enforced via ThreadPoolExecutor
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(doc_ref.set, doc, timeout=5.0)
+                    future.result(timeout=5.0)
+
+                elapsed = time.perf_counter() - t_start
+                logger.info(f"✅ [Firestore Write Complete] [{complaint_id}] Successfully saved to Firestore in {elapsed:.3f}s")
                 return doc
+            except concurrent.futures.TimeoutError:
+                elapsed = time.perf_counter() - t_start
+                logger.error(f"❌ [Firestore Write Timeout] [{complaint_id}] Write exceeded 5.0s timeout limit ({elapsed:.3f}s). Falling back to local storage.")
             except Exception as e:
-                logger.error(f"Firestore cloud write error: {e}")
+                elapsed = time.perf_counter() - t_start
+                logger.error(f"❌ [Firestore Write Failed] [{complaint_id}] Cloud write failed after {elapsed:.3f}s: {type(e).__name__}: {e}. (Falling back to local storage)")
 
         # Local storage fallback
         data = self._load_local_data()
@@ -882,6 +962,7 @@ class FirestoreService:
             data[COMPLAINTS_COLLECTION] = []
         data[COMPLAINTS_COLLECTION].insert(0, doc)
         self._save_local_data(data)
+        logger.info(f"💾 [{complaint_id}] Preserved complaint in local JSON storage.")
         return doc
 
     def get_complaints(
@@ -912,7 +993,7 @@ class FirestoreService:
                 if locality and locality != "unspecified":
                     query = query.where("locality", "==", locality)
 
-                docs = query.limit(limit).stream()
+                docs = query.limit(limit).stream(timeout=FS_READ_TIMEOUT_S)
                 results = [d.to_dict() for d in docs]
 
                 if search:
@@ -975,7 +1056,7 @@ class FirestoreService:
         """Fetch a single complaint document."""
         if self.use_cloud_firestore and self.db:
             try:
-                doc = self.db.collection(COMPLAINTS_COLLECTION).document(complaint_id).get()
+                doc = self.db.collection(COMPLAINTS_COLLECTION).document(complaint_id).get(timeout=FS_READ_TIMEOUT_S)
                 if doc.exists:
                     return doc.to_dict()
             except Exception as e:
@@ -988,24 +1069,31 @@ class FirestoreService:
         return None
 
     def increment_support(self, complaint_id: str, amount: int = 1) -> Optional[Dict[str, Any]]:
-        """Increment support_count using atomic increment and update priority score if needed."""
+        """Increment support_count using atomic increment with bounded timeout and update priority score if needed."""
         if self.use_cloud_firestore and self.db:
+            t_start = time.perf_counter()
             try:
                 from firebase_admin import firestore as fa_firestore
                 doc_ref = self.db.collection(COMPLAINTS_COLLECTION).document(complaint_id)
-                doc_ref.update({
-                    "support_count": fa_firestore.firestore.Increment(amount)
-                })
-                snapshot = doc_ref.get()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(doc_ref.update, {
+                        "support_count": fa_firestore.firestore.Increment(amount)
+                    })
+                    future.result(timeout=5.0)
+
+                elapsed = time.perf_counter() - t_start
+                logger.info(f"✅ [Firestore Increment Support] [{complaint_id}] +{amount} applied in {elapsed:.3f}s")
+                snapshot = doc_ref.get(timeout=5.0)
                 if not snapshot.exists:
                     return None
                 current = snapshot.to_dict()
                 if current.get("support_count", 0) >= 100000 and not current.get("high_priority", False):
-                    doc_ref.update({"high_priority": True})
+                    doc_ref.update({"high_priority": True}, timeout=FS_WRITE_TIMEOUT_S)
                     current["high_priority"] = True
                 return current
             except Exception as e:
-                logger.error(f"Firestore cloud support increment error: {e}")
+                elapsed = time.perf_counter() - t_start
+                logger.error(f"❌ [Firestore Support Error] [{complaint_id}] Error after {elapsed:.3f}s: {e}")
 
         # Local storage fallback
         data = self._load_local_data()
@@ -1033,20 +1121,27 @@ class FirestoreService:
         return updated_doc
 
     def update_complaint_status(self, complaint_id: str, status: str, current_level: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Update complaint governance resolution status in Firestore and local storage."""
+        """Update complaint governance resolution status in Firestore with bounded timeout and local storage fallback."""
         update_fields = {"status": status}
         if current_level:
             update_fields["current_level"] = current_level
 
         if self.use_cloud_firestore and self.db:
+            t_start = time.perf_counter()
             try:
                 doc_ref = self.db.collection(COMPLAINTS_COLLECTION).document(complaint_id)
-                doc_ref.update(update_fields)
-                snapshot = doc_ref.get()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(doc_ref.update, update_fields)
+                    future.result(timeout=5.0)
+
+                elapsed = time.perf_counter() - t_start
+                logger.info(f"✅ [Firestore Status Update] [{complaint_id}] Status -> '{status}' updated in {elapsed:.3f}s")
+                snapshot = doc_ref.get(timeout=5.0)
                 if snapshot.exists:
                     return snapshot.to_dict()
             except Exception as e:
-                logger.error(f"Firestore cloud status update error: {e}")
+                elapsed = time.perf_counter() - t_start
+                logger.error(f"❌ [Firestore Status Update Error] [{complaint_id}] Error after {elapsed:.3f}s: {e}")
 
         # Local storage fallback
         data = self._load_local_data()
@@ -1067,7 +1162,7 @@ class FirestoreService:
         if self.use_cloud_firestore and self.db:
             try:
                 query = self.db.collection(COMPLAINTS_COLLECTION).where("user_id", "==", user_id)
-                docs = query.stream()
+                docs = query.stream(timeout=FS_READ_TIMEOUT_S)
                 results = sorted([d.to_dict() for d in docs], key=lambda x: x.get("timestamp", 0), reverse=True)
                 return results
             except Exception as e:
@@ -1082,11 +1177,17 @@ class FirestoreService:
 
     def get_official(self, official_id: str) -> Optional[Dict[str, Any]]:
         """Lookup official profile from Cloud Firestore, local storage, or fallback seed list."""
+        cached = self._official_cache.get(official_id)
+        if cached and time.time() - cached[0] < OFFICIAL_CACHE_TTL_S:
+            return dict(cached[1])
+
         if self.use_cloud_firestore and self.db:
             try:
-                doc = self.db.collection(OFFICIALS_COLLECTION).document(official_id).get()
+                doc = self.db.collection(OFFICIALS_COLLECTION).document(official_id).get(timeout=FS_READ_TIMEOUT_S)
                 if doc.exists:
-                    return doc.to_dict()
+                    official = doc.to_dict()
+                    self._official_cache[official_id] = (time.time(), official)
+                    return dict(official)
             except Exception as e:
                 logger.error(f"Firestore official lookup error: {e}")
 

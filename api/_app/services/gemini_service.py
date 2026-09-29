@@ -644,43 +644,23 @@ async def classify_complaint_with_gemini(
     deadline = loop.time() + GEMINI_TOTAL_BUDGET_S
 
     try:
-        parsed_dict = None
-        last_exception: Optional[BaseException] = None
+        # Pin directly to confirmed working model (gemini-3.6-flash) without sequential trial latency
+        model_name = settings.GEMINI_MODEL or "gemini-3.6-flash"
+        logger.info(f"🤖 [Gemini API Invoked] Calling pinned model '{model_name}' for text: '{text[:60]}...'")
 
-        for model_name in _candidate_models():
-            remaining = deadline - loop.time()
-            if remaining <= 0.5:
-                last_exception = last_exception or TimeoutError("Gemini latency budget exhausted")
-                break
-            try:
-                # Run the blocking SDK call off the event loop, bounded by the remaining budget.
-                parsed_dict = await asyncio.wait_for(
-                    asyncio.to_thread(_call_gemini_model, api_key, model_name, text),
-                    timeout=min(remaining, GEMINI_PER_MODEL_TIMEOUT_S + 1.0)
-                )
-                parsed_dict["classified_by"] = "gemini"
+        # Run the blocking SDK call off the event loop, bounded by the latency budget.
+        parsed_dict = await asyncio.wait_for(
+            asyncio.to_thread(_call_gemini_model, api_key, model_name, text),
+            timeout=GEMINI_PER_MODEL_TIMEOUT_S + 1.0
+        )
+        parsed_dict["classified_by"] = "gemini"
 
-                _preferred_model = model_name
-                _runtime_gemini_state["gemini_success_count"] += 1
-                _runtime_gemini_state["last_used"] = f"gemini ({model_name})"
-                _runtime_gemini_state["reachable"] = True
-                _runtime_gemini_state["model"] = model_name
-                logger.info(f"Successfully classified with Gemini model: {model_name}")
-                break
-            except asyncio.TimeoutError as model_err:
-                last_exception = model_err
-                logger.warning(f"Gemini model {model_name} timed out. Trying next model...")
-            except Exception as model_err:
-                last_exception = model_err
-                err_name = type(model_err).__name__
-                if err_name in ("NotFound", "PermissionDenied", "InvalidArgument"):
-                    _unavailable_models.add(model_name)
-                    if _preferred_model == model_name:
-                        _preferred_model = None
-                logger.warning(f"Gemini model {model_name} failed: {err_name}. Trying next model...")
-
-        if parsed_dict is None:
-            raise last_exception or Exception("All Gemini models exhausted")
+        _preferred_model = model_name
+        _runtime_gemini_state["gemini_success_count"] += 1
+        _runtime_gemini_state["last_used"] = f"gemini ({model_name})"
+        _runtime_gemini_state["reachable"] = True
+        _runtime_gemini_state["model"] = model_name
+        logger.info(f"✅ [Gemini Success] Successfully classified with model: {model_name}")
 
         # Stage 2: Merge, Validate, Normalize Location, Calculate Priority
         validated = _two_stage_merge_and_validate(

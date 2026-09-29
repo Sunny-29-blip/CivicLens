@@ -337,11 +337,20 @@ export default function ComplaintStudio({ session, onRequireAuth, onViewInFeed, 
         analyzedData?.locality || locality,
         selectedCategories,
         manualCategories,
-        analyzedData
+        {
+          ...analyzedData,
+          summary: analyzedData?.summary,
+          priority_score: analyzedData?.priority_score,
+          priority_reason: analyzedData?.priority_reason,
+          area_type: analyzedData?.area_type,
+          original_language: analyzedData?.original_language,
+          urgency: analyzedData?.urgency,
+          ai_categories: aiCategories
+        }
       );
       setSubmittedDoc(result);
     } catch (err) {
-      setError(err.message || 'Failed to submit issue.');
+      setError(err.message || 'Failed to submit issue. Please check your connection and try again.');
     } finally {
       setIsSubmitting(false);
     }

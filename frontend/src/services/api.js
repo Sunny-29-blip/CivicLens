@@ -153,7 +153,14 @@ export const api = {
         locality,
         confirmed_categories: confirmedCategories,
         manual_categories: manualCategories,
-        analysis
+        analysis,
+        summary: analysis?.summary,
+        priority_score: analysis?.priority_score,
+        priority_reason: analysis?.priority_reason,
+        area_type: analysis?.area_type,
+        original_language: analysis?.original_language,
+        urgency: analysis?.urgency,
+        ai_categories: analysis?.ai_categories || analysis?.categories
       })
     }, 30000, "Saving is taking longer than expected. Please check your connection and try again.");
     if (!res.ok) {

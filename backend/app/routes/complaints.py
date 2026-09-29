@@ -34,6 +34,14 @@ class SubmitComplaintRequest(BaseModel):
         description="Result previously returned by /requests/analyze for this exact text. "
                     "When present, it is re-validated deterministically instead of calling Gemini again."
     )
+    # Pre-analyzed fields from Step 3 (review) to eliminate redundant LLM calls on save
+    summary: Optional[str] = Field(None, description="One-sentence summary already generated in Step 3")
+    priority_score: Optional[int] = Field(None, description="0-100 priority score already calculated in Step 3")
+    priority_reason: Optional[str] = Field(None, description="Priority rationale already generated in Step 3")
+    area_type: Optional[str] = Field(None, description="'rural' or 'urban' from Step 3")
+    original_language: Optional[str] = Field(None, description="Detected original language from Step 3")
+    urgency: Optional[str] = Field(None, description="'low', 'medium', or 'high' from Step 3")
+    ai_categories: Optional[List[str]] = Field(None, description="AI detected categories from Step 3")
 
 
 class ComplaintResponse(BaseModel):
@@ -145,11 +153,32 @@ async def submit_complaint(payload: SubmitComplaintRequest):
                 state_hint=payload.state,
                 district_hint=payload.district
             )
+            logger.info(f"⚡ [/requests/submit] Reusing citizen-reviewed analysis from payload.analysis. ZERO Gemini calls during save step. Categories: {payload.confirmed_categories or classification.get('categories')}")
         except Exception as e:
             logger.warning(f"Provided analysis failed validation ({type(e).__name__}); re-classifying.")
             classification = None
+    elif payload.summary and payload.area_type:
+        logger.info(f"⚡ [/requests/submit] Reusing citizen-reviewed analysis. ZERO Gemini calls during save step (Gemini called exactly once in analyze step). Categories: {payload.confirmed_categories or payload.ai_categories}")
+        jurisdiction = normalize_location(
+            complaint_text=payload.text,
+            state_hint=payload.state,
+            district_hint=payload.district
+        )
+        classification = {
+            "categories": payload.ai_categories or ["roads"],
+            "area_type": payload.area_type,
+            "summary": payload.summary,
+            "urgency": payload.urgency or "medium",
+            "original_language": payload.original_language or "English",
+            "classified_by": "gemini",
+            "state": jurisdiction.state,
+            "district": jurisdiction.district,
+            "locality": payload.locality or jurisdiction.locality,
+            "location": jurisdiction.location_str
+        }
 
     if classification is None:
+        logger.info("ℹ️ [/requests/submit] Direct submission without prior analyze step. Running Gemini classification...")
         classification = await classify_complaint_with_gemini(
             text=payload.text,
             state_hint=payload.state,
@@ -157,6 +186,16 @@ async def submit_complaint(payload: SubmitComplaintRequest):
         )
 
     ai_cats = list(classification.get("categories", ["roads"]))
+    area_type = classification["area_type"]
+    summary = classification["summary"]
+    urgency = classification["urgency"]
+    original_language = classification["original_language"]
+    classified_by = classification.get("classified_by", "gemini")
+    state = classification.get("state", payload.state or "unspecified")
+    district = classification.get("district", payload.district or "unspecified")
+    locality = classification.get("locality", payload.locality or "unspecified")
+    location = classification.get("location", "unspecified")
+
     manual_cats = payload.manual_categories or []
 
     # If citizen passed confirmed_categories from review UI, respect them!
@@ -173,24 +212,18 @@ async def submit_complaint(payload: SubmitComplaintRequest):
     if not final_categories:
         final_categories = [ai_cats[0] if ai_cats else "roads"]
 
-    # 2. Canonical jurisdiction resolution
-    state = classification.get("state", payload.state or "unspecified")
-    district = classification.get("district", payload.district or "unspecified")
-    locality = classification.get("locality", payload.locality or "unspecified")
-    location = classification.get("location", "unspecified")
-
-    # 3. 0–100 Priority Score Calculation
+    # 2. 0–100 Priority Score Calculation (reflects citizen's reviewed categories)
     priority_score, priority_reason = calculate_priority_score(
-        urgency=classification["urgency"],
+        urgency=urgency,
         categories=final_categories,
         raw_text=payload.text,
         support_count=1
     )
 
-    # 4. Assemble document payload
+    # 3. Assemble document payload
     complaint_data = {
         "raw_text": payload.text,
-        "area_type": classification["area_type"],
+        "area_type": area_type,
         "categories": final_categories,
         "ai_categories": ai_cats,
         "manual_categories": manual_cats,
@@ -198,17 +231,17 @@ async def submit_complaint(payload: SubmitComplaintRequest):
         "state": state,
         "district": district,
         "locality": locality,
-        "urgency": classification["urgency"],
+        "urgency": urgency,
         "priority_score": priority_score,
         "priority_reason": priority_reason,
-        "summary": classification["summary"],
-        "original_language": classification["original_language"],
+        "summary": summary,
+        "original_language": original_language,
         "user_id": payload.user_id,
         "support_count": 1,
         "high_priority": priority_score >= 75,
         "timestamp": time.time(),
         "status": "pending",
-        "classified_by": classification.get("classified_by", "gemini")
+        "classified_by": classified_by
     }
 
     # 5. Save to Firestore / local JSON storage

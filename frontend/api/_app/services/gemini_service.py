@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 import logging
@@ -565,6 +566,58 @@ def _heuristic_classify(
     return result_obj.model_dump()
 
 
+# Latency budget for Gemini. The legacy SDK call is blocking and, by default, has no
+# timeout and retries internally — a single unreachable/unknown model could hang a request
+# for minutes. We bound every attempt and the overall classification so the citizen always
+# gets an answer (Gemini or deterministic fallback) within a few seconds.
+GEMINI_PER_MODEL_TIMEOUT_S: float = 8.0
+GEMINI_TOTAL_BUDGET_S: float = 12.0
+
+# Model that last succeeded in this process; tried first so warm instances make one call.
+_preferred_model: Optional[str] = None
+# Models that returned NotFound / permission errors are skipped for the life of the process.
+_unavailable_models: set = set()
+
+
+def _candidate_models() -> List[str]:
+    models: List[str] = []
+    for m in [
+        _preferred_model,
+        settings.GEMINI_MODEL,
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.5-flash",
+        "gemini-flash-latest",
+    ]:
+        if m and m not in models and m not in _unavailable_models:
+            models.append(m)
+    return models
+
+
+def _call_gemini_model(api_key: str, model_name: str, text: str) -> Dict[str, Any]:
+    """Blocking single-model Gemini call with a hard per-request timeout and no SDK retries."""
+    import google.generativeai as legacy_genai
+    legacy_genai.configure(api_key=api_key)
+    model = legacy_genai.GenerativeModel(
+        model_name=model_name,
+        system_instruction=SYSTEM_PROMPT,
+        generation_config={"response_mime_type": "application/json", "temperature": 0.1}
+    )
+    user_prompt = f"Analyze this citizen complaint:\n\n\"\"\"\n{text}\n\"\"\""
+    legacy_resp = model.generate_content(
+        user_prompt,
+        request_options={"timeout": GEMINI_PER_MODEL_TIMEOUT_S, "retry": None}
+    )
+    cleaned_json = legacy_resp.text.strip()
+    if cleaned_json.startswith("```json"):
+        cleaned_json = cleaned_json[7:]
+    if cleaned_json.startswith("```"):
+        cleaned_json = cleaned_json[3:]
+    if cleaned_json.endswith("```"):
+        cleaned_json = cleaned_json[:-3]
+    return json.loads(cleaned_json.strip())
+
+
 async def classify_complaint_with_gemini(
     text: str,
     state_hint: Optional[str] = None,
@@ -572,11 +625,12 @@ async def classify_complaint_with_gemini(
 ) -> Dict[str, Any]:
     """
     Two-Stage Multi-Label Civic Complaint Classification:
-    1. Ingestion through Google GenAI SDK (gemini-3.6-flash) using structured output.
+    1. Ingestion through Google GenAI SDK (gemini flash models) using structured output.
     2. Deterministic multi-label validation and text inspection merge.
     3. Canonical location normalization & 0–100 priority score calculation.
-    4. Seamless offline fallback on rate-limits, errors, or missing credentials.
+    4. Seamless offline fallback on rate-limits, errors, timeouts, or missing credentials.
     """
+    global _preferred_model
     api_key = settings.GEMINI_API_KEY
     _runtime_gemini_state["total_classifications"] += 1
 
@@ -586,55 +640,27 @@ async def classify_complaint_with_gemini(
         _runtime_gemini_state["last_used"] = "heuristic_fallback"
         return _heuristic_classify(text, state_hint=state_hint, district_hint=district_hint)
 
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + GEMINI_TOTAL_BUDGET_S
+
     try:
-        # Attempt classification via candidate active Gemini models
-        candidate_models = [
-            "gemini-3.8-flash",
-            "gemini-3.7-flash",
-            "gemini-3.5-flash",
-            settings.GEMINI_MODEL or "gemini-3.8-flash",
-            "gemini-flash-latest"
-        ]
-        
-        parsed_dict = None
-        last_exception = None
+        # Pin directly to confirmed working model (gemini-3.6-flash) without sequential trial latency
+        model_name = settings.GEMINI_MODEL or "gemini-3.6-flash"
+        logger.info(f"🤖 [Gemini API Invoked] Calling pinned model '{model_name}' for text: '{text[:60]}...'")
 
-        import google.generativeai as legacy_genai
-        legacy_genai.configure(api_key=api_key)
+        # Run the blocking SDK call off the event loop, bounded by the latency budget.
+        parsed_dict = await asyncio.wait_for(
+            asyncio.to_thread(_call_gemini_model, api_key, model_name, text),
+            timeout=GEMINI_PER_MODEL_TIMEOUT_S + 1.0
+        )
+        parsed_dict["classified_by"] = "gemini"
 
-        for model_name in candidate_models:
-            if not model_name:
-                continue
-            try:
-                model = legacy_genai.GenerativeModel(
-                    model_name=model_name,
-                    system_instruction=SYSTEM_PROMPT,
-                    generation_config={"response_mime_type": "application/json", "temperature": 0.1}
-                )
-                user_prompt = f"Analyze this citizen complaint:\n\n\"\"\"\n{text}\n\"\"\""
-                legacy_resp = model.generate_content(user_prompt)
-                cleaned_json = legacy_resp.text.strip()
-                if cleaned_json.startswith("```json"):
-                    cleaned_json = cleaned_json[7:]
-                if cleaned_json.startswith("```"):
-                    cleaned_json = cleaned_json[3:]
-                if cleaned_json.endswith("```"):
-                    cleaned_json = cleaned_json[:-3]
-                parsed_dict = json.loads(cleaned_json.strip())
-                parsed_dict["classified_by"] = "gemini"
-
-                _runtime_gemini_state["gemini_success_count"] += 1
-                _runtime_gemini_state["last_used"] = f"gemini ({model_name})"
-                _runtime_gemini_state["reachable"] = True
-                _runtime_gemini_state["model"] = model_name
-                logger.info(f"Successfully classified with Gemini model: {model_name}")
-                break
-            except Exception as model_err:
-                last_exception = model_err
-                logger.warning(f"Gemini model {model_name} failed: {type(model_err).__name__}. Trying next model...")
-
-        if parsed_dict is None:
-            raise last_exception or Exception("All Gemini models exhausted")
+        _preferred_model = model_name
+        _runtime_gemini_state["gemini_success_count"] += 1
+        _runtime_gemini_state["last_used"] = f"gemini ({model_name})"
+        _runtime_gemini_state["reachable"] = True
+        _runtime_gemini_state["model"] = model_name
+        logger.info(f"✅ [Gemini Success] Successfully classified with model: {model_name}")
 
         # Stage 2: Merge, Validate, Normalize Location, Calculate Priority
         validated = _two_stage_merge_and_validate(

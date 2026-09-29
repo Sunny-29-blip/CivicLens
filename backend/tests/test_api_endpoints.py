@@ -140,7 +140,7 @@ def test_officials_portal_and_hotspots_calculation():
 
     # 3. Status update
     complaint_id = top_hotspot["complaints"][0]["id"]
-    status_res = client.patch(f"/officials/complaints/{complaint_id}/status", json={"status": "in_progress"})
+    status_res = client.patch(f"/officials/complaints/{complaint_id}/status?token={token}", json={"status": "in_progress"})
     assert status_res.status_code == 200
     assert status_res.json()["new_status"] == "in_progress"
 
